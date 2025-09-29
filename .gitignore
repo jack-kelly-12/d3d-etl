@@ -1,0 +1,10 @@
+.Rhistory
+.ipynb_checkpoints/
+.ipynb
+__pycache__/
+scrapers/.env
+.vscode/
+new_data/
+*.ipynb
+venv/
+scrapers/.env
