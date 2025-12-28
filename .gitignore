@@ -4,7 +4,7 @@
 __pycache__/
 scrapers/.env
 .vscode/
-new_data/
+data/
 *.ipynb
 venv/
 scrapers/.env

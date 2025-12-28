@@ -1,10 +1,12 @@
-import pandas as pd
 import glob
 import re
 import unicodedata
 from pathlib import Path
 from urllib.parse import urlparse
-from rapidfuzz import process, fuzz
+
+import pandas as pd
+from rapidfuzz import fuzz, process
+
 
 def clean_name(name: str) -> str:
     if pd.isna(name):
@@ -229,7 +231,7 @@ def main(data_dir: str, year: int):
             img_col = "img_url" if "img_url" in tr_subset.columns else None
             if img_col is not None:
                 tr_subset = tr_subset[tr_subset[img_col].astype(str).str.strip() != ""]
-    
+
             if "team_name" in tr_subset.columns and "team_name" in rosters.columns:
                 teams = rosters["team_name"].dropna().astype(str).str.strip().unique().tolist()
                 tr_subset = tr_subset[tr_subset["team_name"].astype(str).str.strip().isin(teams)].copy()

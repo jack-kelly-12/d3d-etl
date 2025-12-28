@@ -1,37 +1,29 @@
-from playwright.sync_api import sync_playwright
-import pandas as pd
+import argparse
 import time
 from pathlib import Path
-import argparse
+
+import pandas as pd
+from playwright.sync_api import sync_playwright
 
 BASE = "https://stats.ncaa.org"
-DIV_MAP = {"D-I": 1, "D-II": 2, "D-III": 3}
-
-def year_to_season(year: int) -> str:
-    return f"{year-1}-{str(year)[-2:]}"
 
 def scrape_rosters(team_ids_file, year, divisions, outdir, batch_size=10, pause_between_batches=2):
-    season = year_to_season(year)
     teams = pd.read_csv(team_ids_file)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=r"C:\\Users\\jackkelly\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
-            headless=False,
-            channel="chrome"
-        )
+        browser = p.chromium.launch(headless=False)
         page = browser.new_page()
 
         for div in divisions:
-            teams_div = teams.query("season == @season and division == @list(DIV_MAP.keys())[@div-1]").copy()
+            teams_div = teams.query("year == @year and division == @div").copy()
             if teams_div.empty:
                 continue
 
             teams_div["team_id"] = teams_div["team_id"].astype(int)
             total_teams = len(teams_div)
-            print(f"\n=== {season} ({year}) D{div} rosters — {total_teams} teams ===")
+            print(f"\n=== {year} D{div} rosters — {total_teams} teams ===")
 
             rows = []
 
@@ -39,7 +31,7 @@ def scrape_rosters(team_ids_file, year, divisions, outdir, batch_size=10, pause_
                 team_id = row.team_id
                 school = row.school_name
                 conference = row.conference
-                division = DIV_MAP.get(row.division, None)
+                division = div
 
                 url = f"{BASE}/teams/{team_id}/roster"
                 try:
@@ -62,7 +54,6 @@ def scrape_rosters(team_ids_file, year, divisions, outdir, batch_size=10, pause_
                         rows.append({
                             "org_id": row.org_id,
                             "school_name": school,
-                            "season": season,
                             "year": year,
                             "division": div,
                             "team_id": team_id,
@@ -99,8 +90,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1,2,3])
-    parser.add_argument("--team_ids_file", default="../new_data/ncaa_team_history.csv")
-    parser.add_argument("--outdir", default="../new_data/rosters")
+    parser.add_argument("--team_ids_file", default="../data/ncaa_team_history.csv")
+    parser.add_argument("--outdir", default="../data/rosters")
     args = parser.parse_args()
 
     scrape_rosters(

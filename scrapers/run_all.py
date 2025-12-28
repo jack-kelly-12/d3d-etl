@@ -1,7 +1,7 @@
+import argparse
 import subprocess
 import sys
 from pathlib import Path
-import argparse
 
 YEARS = [2021, 2022, 2023, 2024, 2025]
 DIVISIONS = [1, 2, 3]
@@ -20,30 +20,28 @@ def main():
 
     for year in YEARS:
         for div in DIVISIONS:
-            sched_file = Path(f"../new_data/schedules/d{div}_schedules_{year}.csv")
-            stats_file_b = Path(f"../new_data/stats/d{div}_batting_{year}.csv")
-            stats_file_p = Path(f"../new_data/stats/d{div}_pitching_{year}.csv")
-            pbp_file = Path(f"../new_data/pbp/d{div}_pbp_{year}.csv")
-    
+            sched_file = Path(f"../data/schedules/d{div}_schedules_{year}.csv")
+            stats_file_b = Path(f"../data/stats/d{div}_batting_{year}.csv")
+            pbp_file = Path(f"../data/pbp/d{div}_pbp_{year}.csv")
+
             run([sys.executable, "collect_schedules.py",
                  "--year", str(year),
                  "--divisions", str(div),
-                 "--team_ids_file", "../new_data/ncaa_team_history.csv",
-                 "--outdir", "../new_data/schedules"],
+                 "--team_ids_file", "../data/ncaa_team_history.csv",
+                 "--outdir", "../data/schedules"],
                 sched_file, args.skip_existing)
 
             run([sys.executable, "collect_stats.py",
                  "--year", str(year),
                  "--divisions", str(div),
-                 "--team_ids_file", "../new_data/ncaa_team_history.csv",
-                 "--outdir", "../new_data/stats"],
-                stats_file_b, args.skip_existing)
+                 "--team_ids_file", "../data/ncaa_team_history.csv",
+                 "--outdir", "../data/stats"], args.skip_existing)
 
             run([sys.executable, "collect_pbp.py",
                  "--year", str(year),
                  "--divisions", str(div),
-                 "--indir", "../new_data/schedules",
-                 "--outdir", "../new_data/pbp"],
+                 "--indir", "../data/schedules",
+                 "--outdir", "../data/pbp"],
                 pbp_file, args.skip_existing)
 
 if __name__ == "__main__":

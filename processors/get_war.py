@@ -1,13 +1,9 @@
-# -*- coding: utf-8 -*-
-import pandas as pd
-import numpy as np
-from rapidfuzz import fuzz, process
-from pathlib import Path
 from functools import lru_cache
+from pathlib import Path
 
-# ============================================================
-# Config / Schemas
-# ============================================================
+import numpy as np
+import pandas as pd
+from rapidfuzz import fuzz, process
 
 position_adjustments = {
     'SS': 1.85, 'C': 3.09, '2B': 0.62, '3B': 0.62, 'UT': 0.62,
@@ -36,12 +32,9 @@ pitching_columns = [
     'clutch', 'pwpa', 'prea', 'pwpa/li', 'war', 'sos_adj_war'
 ]
 
-# ============================================================
-# Utilities
-# ============================================================
-
 def norm_team(s: str) -> str:
-    if pd.isna(s): return ""
+    if pd.isna(s): 
+        return ""
     s = str(s).lower().strip()
     s = s.replace("&", "and").replace(".", "").replace("  ", " ")
     return s
@@ -55,10 +48,6 @@ def _best_name_match(query, choices, *, cutoff=80, scorer=fuzz.token_sort_ratio)
 @lru_cache(maxsize=4096)
 def _team_roster_names(team_dict_keys_tuple):
     return list(team_dict_keys_tuple)
-
-# ============================================================
-# SoS mapping + normalization
-# ============================================================
 
 def build_team_to_sos(rankings_df, mappings):
     rk = rankings_df.copy()
@@ -168,10 +157,6 @@ def normalize_division_war(bat_df, pitch_df, standings_df, division, year, pitch
 
     return bat_df, pitch_df
 
-# ============================================================
-# Baserunning micro-components
-# ============================================================
-
 def calculate_wgdp(pbp_df):
     gdp_opps = pbp_df[(pbp_df['r1_name'] != '') & (pbp_df['outs_before'].astype(int) < 2)].copy()
     gdp_events = gdp_opps[gdp_opps['description'].str.contains('double play', case=False, na=False)]
@@ -220,46 +205,55 @@ def calculate_extra_bases(df, roster, weights):
     # Singles
     singles = df[df['event_cd'] == 20]
     for idx, play in singles.iterrows():
-        nxt = next_play_row(idx, singles)
+        nxt = next_play_row(idx, df)
         team_dict = batting_lookup.get(play.bat_team, {})
-
+        
         if pd.notna(play.r1_name) and team_dict:
             s1 = match_name(play.r1_name, team_dict)
             if s1:
                 opportunities[s1] = opportunities.get(s1, 0) + 1
                 if nxt is not None:
-                    next_names = {nxt.get('r1_name'), nxt.get('r2_name'), nxt.get('r3_name')}
-                    if play.outs_on_play > 0 and play.r1_name not in next_names:
+                    next_r1 = match_name(nxt.get('r1_name'), team_dict) if pd.notna(nxt.get('r1_name')) else None
+                    next_r2 = match_name(nxt.get('r2_name'), team_dict) if pd.notna(nxt.get('r2_name')) else None
+                    next_r3 = match_name(nxt.get('r3_name'), team_dict) if pd.notna(nxt.get('r3_name')) else None
+                    next_names = {next_r1, next_r2, next_r3} - {None}
+                    if play.outs_on_play > 0 and s1 not in next_names:
                         outs_on_bases[s1] = outs_on_bases.get(s1, 0) + 1
-                    elif play.r1_name == nxt.get('r3_name'):
+                    elif s1 == next_r3:
                         extra_bases[s1] = extra_bases.get(s1, 0) + 1
-
+        
         if pd.notna(play.r2_name) and team_dict:
             s2 = match_name(play.r2_name, team_dict)
             if s2:
                 opportunities[s2] = opportunities.get(s2, 0) + 1
                 if nxt is not None:
-                    next_names = {nxt.get('r1_name'), nxt.get('r2_name'), nxt.get('r3_name')}
-                    if play.outs_on_play > 0 and play.r2_name not in next_names:
+                    next_r1 = match_name(nxt.get('r1_name'), team_dict) if pd.notna(nxt.get('r1_name')) else None
+                    next_r2 = match_name(nxt.get('r2_name'), team_dict) if pd.notna(nxt.get('r2_name')) else None
+                    next_r3 = match_name(nxt.get('r3_name'), team_dict) if pd.notna(nxt.get('r3_name')) else None
+                    next_names = {next_r1, next_r2, next_r3} - {None}
+                    if play.outs_on_play > 0 and s2 not in next_names:
                         outs_on_bases[s2] = outs_on_bases.get(s2, 0) + 1
-                    elif (play.r2_name not in next_names) and (play.runs_on_play > 0):
+                    elif (s2 not in next_names) and (play.runs_on_play > 0):
                         extra_bases[s2] = extra_bases.get(s2, 0) + 1
 
     # Doubles
     doubles = df[df['event_cd'] == 21]
     for idx, play in doubles.iterrows():
-        nxt = next_play_row(idx, doubles)
+        nxt = next_play_row(idx, df)
         team_dict = batting_lookup.get(play.bat_team, {})
-
+        
         if pd.notna(play.r1_name) and team_dict:
             s1 = match_name(play.r1_name, team_dict)
             if s1:
                 opportunities[s1] = opportunities.get(s1, 0) + 1
                 if nxt is not None:
-                    next_names = {nxt.get('r1_name'), nxt.get('r2_name'), nxt.get('r3_name')}
-                    if play.outs_on_play > 0 and play.r1_name not in next_names:
+                    next_r1 = match_name(nxt.get('r1_name'), team_dict) if pd.notna(nxt.get('r1_name')) else None
+                    next_r2 = match_name(nxt.get('r2_name'), team_dict) if pd.notna(nxt.get('r2_name')) else None
+                    next_r3 = match_name(nxt.get('r3_name'), team_dict) if pd.notna(nxt.get('r3_name')) else None
+                    next_names = {next_r1, next_r2, next_r3} - {None}
+                    if play.outs_on_play > 0 and s1 not in next_names:
                         outs_on_bases[s1] = outs_on_bases.get(s1, 0) + 1
-                    elif (play.r1_name not in next_names) and (play.runs_on_play > 0):
+                    elif (s1 not in next_names) and (play.runs_on_play > 0):
                         extra_bases[s1] = extra_bases.get(s1, 0) + 1
 
     results = pd.DataFrame({
@@ -289,10 +283,6 @@ def calculate_extra_bases(df, roster, weights):
     )
 
     return results.sort_values('ebt', ascending=False)
-
-# ============================================================
-# Clutch (batters + pitchers)
-# ============================================================
 
 def get_clutch_stats(pbp_df):
     pbp_df = pbp_df.copy()
@@ -364,9 +354,6 @@ def get_pitcher_clutch_stats(pbp_df):
 
     return pitcher_stats, team_stats
 
-# ============================================================
-# Player WAR (Batting)
-# ============================================================
 
 def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_df, division, year):
     if batting_df.empty:
@@ -377,7 +364,6 @@ def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_
     df = batting_df.copy()
     df['pos'] = df['pos'].apply(lambda x: '' if pd.isna(x) else str(x).split('/')[0].upper())
 
-    # Baserunning micro-components
     gdp_stats = calculate_wgdp(pbp_df)
     teb_stats = calculate_extra_bases(pbp_df, rosters_df, weights)
 
@@ -402,21 +388,23 @@ def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_
     df['bb%'] = (df['bb'] / df['pa']).replace([np.inf,-np.inf],0)*100
     df['k%']  = (df['k']  / df['pa']).replace([np.inf,-np.inf],0)*100
     df['ba']  = df['h'] / df['ab']
-    df['slg_pct'] = (df['h'] + df['2b'] + 2*df['3b'] + 3*df['hr']) / df['ab']
+    df['slg_pct'] = (df['1b'] + 2*df['2b'] + 3*df['3b'] + 4*df['hr']) / df['ab']
+
     df['ob_pct']  = (df['h'] + df['bb'] + df['hbp'] + df['ibb']) / (df['ab'] + df['bb'] + df['ibb'] + df['hbp'] + df['sf'])
     df['iso'] = df['slg_pct'] - df['ba']
-
+    tb = df['slg_pct'] * df['ab']
+    df['runs_created'] = tb * (df['h'] + df['bb']) / (df['ab'] + df['bb'])
+    
     lg_obp = (df['h'].sum() + df['bb'].sum() + df['hbp'].sum()) / (df['ab'].sum() + df['bb'].sum() + df['hbp'].sum() + df['sf'].sum())
     lg_slg = (df['1b'].sum() + 2*df['2b'].sum() + 3*df['3b'].sum() + 4*df['hr'].sum()) / df['ab'].sum()
     df['ops_plus'] = 100 * (df['ob_pct'] / lg_obp + df['slg_pct'] / lg_slg - 1)
-    df['r/pa'] = df['r'] / df['pa']
+    df['r/pa'] = df['runs_created'] / df['pa']
 
     num = (weights['wbb']*df['bb'] + weights['whbp']*df['hbp'] + weights['w1b']*df['1b'] +
            weights['w2b']*df['2b'] + weights['w3b']*df['3b'] + weights['whr']*df['hr'])
     den = df['ab'] + df['bb'] - df['ibb'] + df['sf'] + df['hbp']
     df['woba'] = num / den
 
-    # Team clutch merge (batting)
     player_stats, team_stats = get_clutch_stats(pbp_df)
     df = df.merge(player_stats.drop(columns=['year','division'], errors='ignore'),
               on='player_id', how='left')
@@ -435,7 +423,7 @@ def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_
     runCS = -1 * (2 * runs_per_out + 0.075)
     runSB = 0.2
 
-    # Conference run environment (R/PA)
+    # Conference run environment
     conf_wrc = {}
     for conf in df['conference'].unique():
         conf_df = df[df['conference'] == conf]
@@ -457,21 +445,18 @@ def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_
              max((df['1b'].sum() + df['bb'].sum() + df['hbp'].sum() - df['ibb'].sum()), 1e-12))
     df['wsb'] = (df['sb'] * runSB + df['cs'] * runCS - lgwSB * (df['1b'] + df['bb'] + df['hbp'] - df['ibb']))
 
-    # Replacement allocation (same structure you used)
+    # Replacement allocation
     team_count = max(len(df['team_name'].unique()), 1)
     games_played = (df['gs'].sum() / 9) / team_count
     replacement_constant = ((team_count / 2) * games_played - (team_count * games_played * 0.294))
-    # Scale replacement to players by PA share; convert wins->runs via rpw
+    # Scale replacement to players by PA share
     df['replacement_level_runs'] = (replacement_constant * rpw) * (df['pa'] / max(pa.sum(), 1e-12))
 
-    # Baserunning bundle
     df['baserunning'] = (df['wsb'].fillna(0) + df['wgdp'].fillna(0) + df['wteb'].fillna(0))
 
-    # Position + season-length scaling
     base_adj = df['pos'].map(position_adjustments).fillna(0)
     df['adjustment'] = base_adj * (df['gp'] / (40 if division == 3 else 50))
 
-    # League (conference) adjustment
     conf_adjustments = {}
     for conf in df['conference'].unique():
         conf_df = df[df['conference'] == conf]
@@ -485,16 +470,13 @@ def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_
 
     df['league_adjustment'] = df.apply(lambda x: conf_adjustments.get(x['conference'], 0) * x['pa'], axis=1)
 
-    # WAR
     df['war'] = ((df['batting_runs'] + df['replacement_level_runs'] +
                   df['baserunning'] + df['adjustment'] + df['league_adjustment']) / rpw)
 
-    # wRC+
     wraa_pa = df['wraa'] / df['pa']
     league_wrcpa = (df['wrc'].sum() / max(df['pa'].sum(), 1e-12))
     df['wrc_plus'] = (((wraa_pa + league_rpa) + (league_rpa - pf * league_rpa)) / league_wrcpa) * 100
 
-    # Standardize + fill
     df = df.rename(columns={'sh': 'sac', 'batting_runs': 'batting'})
     df['year'] = year
     df['division'] = division
@@ -505,10 +487,6 @@ def calculate_batting_war(batting_df, guts_df, park_factors_df, pbp_df, rosters_
     df = df[batting_pre_cols]
 
     return df.dropna(subset=['war']), team_stats
-
-# ============================================================
-# Player WAR (Pitching)
-# ============================================================
 
 def calculate_pitching_war(pitching_df, pbp_df, park_factors_df, bat_war_total, year, division):
     if pitching_df.empty:
@@ -574,7 +552,7 @@ def calculate_pitching_war(pitching_df, pbp_df, park_factors_df, bat_war_total, 
     df['fip'] = fip
     df['xfip'] = xfip
 
-    # gmLI for relievers
+    # gmLI for relievers    
     first_li_per_game = (
         pbp_df.sort_values(['pitcher_id', 'contest_id', 'play_id'])
         .groupby(['pitcher_id', 'contest_id'])
@@ -588,8 +566,7 @@ def calculate_pitching_war(pitching_df, pbp_df, park_factors_df, bat_war_total, 
             .reset_index().rename(columns={'li': 'gmli'}))
     df = df.merge(gmli, how='left', left_on='player_id', right_on='pitcher_id')
     df['gmli'] = df['gmli'].fillna(0.0)
-
-    # ifFIP by conference
+    
     def calculate_if_fip_constant(group_df):
         group_df = group_df[group_df['ip'] > 0]
         if len(group_df) == 0:
@@ -674,7 +651,6 @@ def calculate_pitching_war(pitching_df, pbp_df, park_factors_df, bat_war_total, 
     relief_mask = df['gs'] < 3
     df.loc[relief_mask & valid_ip_mask, 'war'] *= (1 + df.loc[relief_mask & valid_ip_mask, 'gmli']) / 2
 
-    # Optional cross-scaling to hit target share (kept: your approach)
     total_pitching_war = df['war'].sum()
     target_pitching_war = (bat_war_total * 0.43) / 0.57  # ~43% share pitching
     ip_sum = max(df.loc[valid_ip_mask, 'ip_float'].sum(), 1e-12)
@@ -684,7 +660,6 @@ def calculate_pitching_war(pitching_df, pbp_df, park_factors_df, bat_war_total, 
     df = df.replace({np.inf: np.nan, -np.inf: np.nan}).fillna(0)
     df[['player_name', 'team_name', 'conference', 'class']] = df[['player_name', 'team_name', 'conference', 'class']].fillna('-')
 
-    # Pitcher clutch/team clutch for team summaries
     pitcher_stats, team_stats = get_pitcher_clutch_stats(pbp_df)
     df = df.merge(pitcher_stats.drop(columns=['year','division'], errors='ignore'),
               left_on='player_id', right_on='pitcher_id', how='left')
@@ -695,10 +670,6 @@ def calculate_pitching_war(pitching_df, pbp_df, park_factors_df, bat_war_total, 
 
     return df.dropna(subset=['war']), team_stats
 
-# ============================================================
-# Team WAR summaries
-# ============================================================
-
 def calculate_pitching_team_war(pitching_df, park_factors_df, team_clutch):
     df = pitching_df.copy()
     numeric_cols = [
@@ -708,11 +679,10 @@ def calculate_pitching_team_war(pitching_df, park_factors_df, team_clutch):
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    agg_dict = {col: 'sum' for col in numeric_cols}
+    agg_dict = dict.fromkeys(numeric_cols, 'sum')
     agg_dict.update({'conference': 'first', 'year': 'first', 'division': 'first'})
     df = df.groupby('team_name').agg(agg_dict).reset_index()
 
-    # Convert decimal IP_float back to baseball notation ip
     def convert_to_baseball_ip(decimal_ip):
         whole_innings = int(decimal_ip)
         frac = decimal_ip - whole_innings
@@ -767,14 +737,18 @@ def calculate_batting_team_war(batting_df, guts_df, park_factors_df, team_clutch
     df['bb%'] = (df['bb'] / df['pa']).replace([np.inf,-np.inf],0) * 100
     df['k%']  = (df['k'] / df['pa']).replace([np.inf,-np.inf],0) * 100
     df['ba']  = df['h'] / df['ab']
-    df['slg_pct'] = (df['h'] + df['2b'] + 2*df['3b'] + 3*df['hr']) / df['ab']
+    df['slg_pct'] = (df['1b'] + 2*df['2b'] + 3*df['3b'] + 4*df['hr']) / df['ab']
     df['ob_pct']  = (df['h'] + df['bb'] + df['hbp'] + df['ibb']) / (df['ab'] + df['bb'] + df['ibb'] + df['hbp'] + df['sf'])
     df['iso'] = df['slg_pct'] - df['ba']
 
     lg_obp = (df['h'].sum() + df['bb'].sum() + df['hbp'].sum()) / (df['ab'].sum() + df['bb'].sum() + df['hbp'].sum() + df['sf'].sum())
     lg_slg = (df['1b'].sum() + 2*df['2b'].sum() + 3*df['3b'].sum() + 4*df['hr'].sum()) / df['ab'].sum()
     df['ops_plus'] = 100 * (df['ob_pct'] / lg_obp + df['slg_pct'] / lg_slg - 1)
-    df['r/pa'] = df['r'] / df['pa']
+    # TB x (H + BB) / (AB + BB)
+    tb = df['slg_pct'] * df['ab']
+    df['runs_created'] = tb * (df['h'] + df['bb']) / (df['ab'] + df['bb'])
+    
+    df['r/pa'] = df['runs_created'] / df['pa']
 
     num = (weights['wbb']*df['bb'] + weights['whbp']*df['hbp'] + weights['w1b']*df['1b'] +
            weights['w2b']*df['2b'] + weights['w3b']*df['3b'] + weights['whr']*df['hr'])
@@ -784,14 +758,12 @@ def calculate_batting_team_war(batting_df, guts_df, park_factors_df, team_clutch
     df = df.merge(team_clutch, left_on='team_name', right_on='bat_team', how='left')
     return df
 
-# ============================================================
-# Data loading
-# ============================================================
-
-def get_data(year, data_dir):
+def get_data(year, data_dir, divisions=None):
+    if divisions is None:
+        divisions = [1, 2, 3]
     pitching, batting, pbp, rosters, guts, park_factors, rankings = {}, {}, {}, {}, {}, {}, {}
 
-    for division in range(1, 4):
+    for division in divisions:
         pitch_raw = pd.read_csv(data_dir / f'stats/d{division}_pitching_{year}.csv')
         bat_raw   = pd.read_csv(data_dir / f'stats/d{division}_batting_{year}.csv')
 
@@ -836,17 +808,15 @@ def get_data(year, data_dir):
     mappings = pd.read_csv(data_dir / 'team_mappings.csv')
     return batting, pitching, pbp, guts, park_factors, rosters, rankings, mappings
 
-# ============================================================
-# Driver
-# ============================================================
-
-def calculate_war(data_dir, year):
-    batting, pitching, pbp, guts, park_factors, rosters, rankings, mappings = get_data(year, data_dir)
+def calculate_war(data_dir, year, divisions=None):
+    if divisions is None:
+        divisions = [1, 2, 3]
+    batting, pitching, pbp, guts, park_factors, rosters, rankings, mappings = get_data(year, data_dir, divisions)
 
     war_dir = Path(data_dir) / 'war'
     war_dir.mkdir(exist_ok=True)
 
-    for division in range(1, 4):
+    for division in divisions:
         print(f"Processing Division {division}, Year {year}")
 
         batting_df       = batting[division]
@@ -894,11 +864,11 @@ def calculate_war(data_dir, year):
         current_total = batting_war['war'].sum() + pitching_war['war'].sum()
         print(f"[d{division} {year}] Target WAR≈{target_total:.2f} | Actual WAR≈{current_total:.2f}")
 
-def main(data_dir, year):
+def main(data_dir, year, divisions=None):
     data_dir = Path(data_dir)
     if not data_dir.exists():
         raise FileNotFoundError(f"Data directory not found: {data_dir}")
-    calculate_war(data_dir, year)
+    calculate_war(data_dir, year, divisions)
     print("Successfully processed all statistics!")
 
 if __name__ == '__main__':
@@ -906,5 +876,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True, help='Root directory containing the data folders')
     parser.add_argument('--year', required=True, type=int)
+    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
+                        help='Divisions to process (default: 1 2 3)')
     args = parser.parse_args()
-    main(args.data_dir, args.year)
+    main(args.data_dir, args.year, args.divisions)

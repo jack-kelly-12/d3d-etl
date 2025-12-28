@@ -1,8 +1,9 @@
-from playwright.sync_api import sync_playwright
-import pandas as pd
+import argparse
 import time
 from pathlib import Path
-import argparse
+
+import pandas as pd
+from playwright.sync_api import sync_playwright
 
 BASE = "https://stats.ncaa.org"
 START_URL = f"{BASE}/teams/history?org_id=141&sport_code=MBA"
@@ -12,11 +13,7 @@ def scrape_team_history(outdir, batch_size=25, pause_between_batches=1):
     outdir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=r"C:\\Users\\jackkelly\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
-            headless=False,
-            channel="chrome"
-        )
+        browser = p.chromium.launch(headless=False)
         page = browser.new_page()
         page.goto(START_URL, timeout=60000)
 
@@ -55,20 +52,27 @@ def scrape_team_history(outdir, batch_size=25, pause_between_batches=1):
                     if season_year < 2020:
                         continue
 
+                    year = int(season.split("-")[1]) + 2000
+
+                    div_str = tds[2]
+                    div_map = {"D-I": 1, "D-II": 2, "D-III": 3}
+                    division = div_map.get(div_str, "-")
+
                     link = tr.query_selector("td a[href^='/teams/']")
                     team_id = int(link.get_attribute("href").split("/")[2]) if link else None
 
                     rows.append({
                         "org_id": org["org_id"],
                         "school_name": org["school_name"],
-                        "season": season,
-                        "coach": tds[1],
-                        "division": tds[2],
+                        "year": year,
+                        "division": division,
                         "conference": tds[3],
                         "wins": tds[4],
                         "losses": tds[5],
                         "ties": tds[6],
                         "wl_pct": tds[7],
+                        "coach": tds[1],
+                        "coach_id": None,
                         "team_id": team_id
                     })
                 print(f"success {org['school_name']} ({org['org_id']})")

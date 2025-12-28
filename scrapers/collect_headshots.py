@@ -1,11 +1,10 @@
 import asyncio
-import re
+from pathlib import Path
+
+import aiohttp
 import pandas as pd
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-import aiohttp
-from pathlib import Path
-from typing import List, Tuple, Optional
 
 DIRECTORY_API = "https://web3.ncaa.org/directory/api/directory/memberList?type=12&sportCode=MBA"
 
@@ -28,7 +27,7 @@ def presto_season_slug(season: int) -> str:
     yy = str(season)[-2:]  # 2026 -> "26"
     return f"{prev}-{yy}"
 
-def build_candidate_urls(base: str, season: int) -> List[Tuple[str, str]]:
+def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
     """
     Returns [(url, hint)], where hint is the URL family we tried.
     Order matters: try Sidearm first, then Presto.
@@ -39,7 +38,7 @@ def build_candidate_urls(base: str, season: int) -> List[Tuple[str, str]]:
         (f"{base}/sports/bsb/{presto_season_slug(season)}/roster", "presto"),
     ]
 
-def detect_cms(html: str) -> Optional[str]:
+def detect_cms(html: str) -> str | None:
     """
     Lightweight detection based on distinctive assets/classes.
     Returns "sidearm", "presto", or None.
@@ -55,7 +54,7 @@ def detect_cms(html: str) -> Optional[str]:
 def _txt(el):
     return el.get_text(strip=True) if el else None
 
-def parse_sidearm(html: str, team: str, season: int, url: str) -> List[dict]:
+def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     rows = []
 
@@ -133,7 +132,7 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> List[dict]:
 
     return rows
 
-def parse_presto(html: str, team: str, season: int, url: str) -> List[dict]:
+def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
     """
     Presto templates vary a bit, so we try a few common patterns.
     Fallback: find player links containing '/players/'.
@@ -226,7 +225,7 @@ def parse_presto(html: str, team: str, season: int, url: str) -> List[dict]:
         })
     return rows
 
-async def fetch_html(browser, url: str) -> Tuple[Optional[str], int]:
+async def fetch_html(browser, url: str) -> tuple[str | None, int]:
     page = await browser.new_page()
     try:
         resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
@@ -238,7 +237,7 @@ async def fetch_html(browser, url: str) -> Tuple[Optional[str], int]:
         await page.close()
         return None, 0
 
-async def scrape_team(browser, base: str, team_name: str, season: int) -> List[dict]:
+async def scrape_team(browser, base: str, team_name: str, season: int) -> list[dict]:
     candidates = build_candidate_urls(base, season)
     for url, hint in candidates:
         print(f"🔎 {team_name}: trying {hint} → {url}")

@@ -1,15 +1,12 @@
-from playwright.sync_api import sync_playwright
-import pandas as pd
-import time
-from pathlib import Path
 import argparse
 import re
+import time
+from pathlib import Path
+
+import pandas as pd
+from playwright.sync_api import sync_playwright
 
 BASE = "https://stats.ncaa.org"
-DIV_LABELS = {1: "D-I", 2: "D-II", 3: "D-III"}
-
-def year_to_season(year: int) -> str:
-    return f"{year-1}-{str(year)[-2:]}"
 
 def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
@@ -18,7 +15,7 @@ def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
         rename_map[col] = col_norm
     return df.rename(columns=rename_map)
 
-def parse_table(table, year, season, school, conference, div, team_id):
+def parse_table(table, year, school, conference, div, team_id):
     headers = [th.inner_text().strip() for th in table.query_selector_all("thead th")]
     headers = [re.sub(r"[^0-9a-zA-Z]+", "_", h).strip("_").lower() for h in headers]
     rows = []
@@ -51,20 +48,14 @@ def parse_table(table, year, season, school, conference, div, team_id):
     return rows
 
 def scrape_stats(team_ids_file, year, divisions, outdir, batch_size=10, max_retries=3):
-    season = year_to_season(year)
     teams = pd.read_csv(team_ids_file)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=r"C:\\Users\\jackkelly\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
-            headless=False,
-            channel="chrome"
-        )
+        browser = p.chromium.launch(headless=False)
         page = browser.new_page()
         for div in divisions:
-            div_label = DIV_LABELS[div]
-            teams_div = teams.query("season == @season and division == @div_label").copy()
+            teams_div = teams.query("year == @year and division == @div").copy()
             if teams_div.empty:
                 continue
             teams_div["team_id"] = teams_div["team_id"].astype(int)
@@ -86,7 +77,7 @@ def scrape_stats(team_ids_file, year, divisions, outdir, batch_size=10, max_retr
                             page.wait_for_selector("#stat_grid tbody tr", timeout=15000)
                             table = page.query_selector("#stat_grid")
                             if table:
-                                rows = parse_table(table, year, season, school, conference, div, team_id)
+                                rows = parse_table(table, year, school, conference, div, team_id)
                                 results["batting"].extend(rows)
                             print(f"success {school} ({team_id}) batting")
                             success = True
@@ -107,7 +98,7 @@ def scrape_stats(team_ids_file, year, divisions, outdir, batch_size=10, max_retr
                             page.wait_for_selector("#stat_grid tbody tr", timeout=15000)
                             table = page.query_selector("#stat_grid")
                             if table:
-                                rows = parse_table(table, "pitching", year, season, school, conference, div, team_id)
+                                rows = parse_table(table, year, school, conference, div, team_id)
                                 results["pitching"].extend(rows)
                             print(f"success {school} ({team_id}) pitching")
                         else:
@@ -124,15 +115,15 @@ def scrape_stats(team_ids_file, year, divisions, outdir, batch_size=10, max_retr
                         df["ncaa_id"] = pd.to_numeric(df["ncaa_id"], errors="coerce").astype("Int64")
                     if "gdp" in df.columns:
                         df = df.drop(columns=['gdp'])
-                    fname = f"d{div}_{stat_type}_{year}.csv"
-                    fpath = outdir / fname
-                    df.rename(columns={
-                        'slgpct': 'slg_pct', 
-                        'obpct': 'ob_pct', 
-                        'player': 'player_name', 
+                    df = df.rename(columns={
+                        'slgpct': 'slg_pct',
+                        'obpct': 'ob_pct',
+                        'player': 'player_name',
                         'team': 'team_name',
                         'hbp': 'hbp',
                         'yr': 'class'})
+                    fname = f"d{div}_{stat_type}_{year}.csv"
+                    fpath = outdir / fname
                     df.to_csv(fpath, index=False)
                     print(f"saved {fpath} ({len(df)} rows)")
         browser.close()
@@ -141,8 +132,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1,2,3])
-    parser.add_argument("--team_ids_file", default="../new_data/ncaa_team_history.csv")
-    parser.add_argument("--outdir", default="../new_data/stats")
+    parser.add_argument("--team_ids_file", default="../data/ncaa_team_history.csv")
+    parser.add_argument("--outdir", default="../data/stats")
     args = parser.parse_args()
     scrape_stats(
         team_ids_file=args.team_ids_file,

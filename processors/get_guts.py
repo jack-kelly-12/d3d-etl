@@ -1,6 +1,6 @@
-import pandas as pd
-import os
 from pathlib import Path
+
+import pandas as pd
 
 
 def calculate_woba_constants(lw_df, batting_df):
@@ -122,14 +122,15 @@ def calculate_guts_constants(division, year, output_path):
         return None
 
 
-def main(data_dir, year):
+def main(data_dir, year, divisions=None):
     data_dir = Path(data_dir)
     guts_dir = data_dir / 'guts'
     guts_dir.mkdir(exist_ok=True)
 
     guts_file = guts_dir / 'guts_constants.csv'
 
-    divisions = [1, 2, 3]
+    if divisions is None:
+        divisions = [1, 2, 3]
 
     all_constants = []
     existing_guts = pd.read_csv(guts_file)
@@ -156,7 +157,9 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True)
-    parser.add_argument('--year', required=True)
+    parser.add_argument('--year', required=True, type=int)
+    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
+                        help='Divisions to process (default: 1 2 3)')
     args = parser.parse_args()
 
-    main(args.data_dir, args.year)
+    main(args.data_dir, args.year, args.divisions)

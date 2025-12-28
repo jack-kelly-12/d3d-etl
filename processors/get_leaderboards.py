@@ -1,7 +1,7 @@
-import pandas as pd
-import numpy as np
-import os
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 
 class BaseballAnalytics:
@@ -418,13 +418,13 @@ class BaseballAnalytics:
             'bat_team': 'first',
             'batter_hand': 'first',
             'description': 'count',
-            'is_pull': lambda x: (x == True).sum(),
-            'is_oppo': lambda x: (x == True).sum(),
+            'is_pull': lambda x: (x).sum(),
+            'is_oppo': lambda x: (x).sum(),
             'is_middle': lambda x: (x == True).sum(),
-            'is_ground': lambda x: (x == True).sum(),
-            'is_fly': lambda x: (x == True).sum(),
-            'is_lined': lambda x: (x == True).sum(),
-            'is_popped': lambda x: (x == True).sum(),
+            'is_ground': lambda x: (x).sum(),
+            'is_fly': lambda x: (x).sum(),
+            'is_lined': lambda x: (x).sum(),
+            'is_popped': lambda x: (x).sum(),
         })
 
         total_bb = stats['is_ground'] + stats['is_fly'] + \
@@ -615,8 +615,10 @@ def standardize_hand(x):
     return np.nan
 
 
-def main(data_dir, year):
+def main(data_dir, year, divisions=None):
     data_dir = Path(data_dir)
+    if divisions is None:
+        divisions = [1, 2, 3]
     leaderboards_dir = data_dir / 'leaderboards'
     leaderboards_dir.mkdir(exist_ok=True)
 
@@ -654,7 +656,7 @@ def main(data_dir, year):
             except Exception as e:
                 print(f"Error loading existing {name} data: {e}")
 
-    for division in range(1, 4):
+    for division in divisions:
         print(f'Processing data for {year} D{division}')
         try:
             pbp_df, bat_war = get_data(year, division, data_dir)
@@ -704,7 +706,9 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True)
-    parser.add_argument('--year', required=True)
+    parser.add_argument('--year', required=True, type=int)
+    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
+                        help='Divisions to process (default: 1 2 3)')
     args = parser.parse_args()
 
-    main(args.data_dir, args.year)
+    main(args.data_dir, args.year, args.divisions)

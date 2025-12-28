@@ -1,6 +1,7 @@
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 
 def get_expected_runs_matrix_2(base_cd, outs, runs_rest_of_inn):
@@ -48,9 +49,10 @@ def get_expected_runs_matrix_2(base_cd, outs, runs_rest_of_inn):
     return er_matrix, prob_matrix
 
 
-def main(data_dir, year):
+def main(data_dir, year, divisions=None):
     data_dir = Path(data_dir)
-    divisions = range(1, 4)
+    if divisions is None:
+        divisions = [1, 2, 3]
     all_matrices = {}
     all_prob_matrices = {}
 
@@ -112,9 +114,10 @@ def main(data_dir, year):
     for division in divisions:
         output_file = misc_dir / f'd{division}_expected_runs_{year}.csv'
         division_df = final_df[final_df['division'] == division]
-        division_df.to_csv(
-            output_file, index=False)
-        print(f"Saved expected runs matrix for D{division} to {output_file}")
+        if not division_df.empty:
+            division_df.to_csv(
+                output_file, index=False)
+            print(f"Saved expected runs matrix for D{division} to {output_file}")
 
 
 if __name__ == '__main__':
@@ -122,7 +125,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True,
                         help='Root directory containing the data folders')
-    parser.add_argument('--year', required=True)
+    parser.add_argument('--year', required=True, type=int)
+    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
+                        help='Divisions to process (default: 1 2 3)')
     args = parser.parse_args()
 
-    main(args.data_dir, args.year)
+    main(args.data_dir, args.year, args.divisions)

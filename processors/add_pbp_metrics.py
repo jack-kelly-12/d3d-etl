@@ -1,7 +1,8 @@
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import os
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 from rapidfuzz import fuzz, process
 
 
@@ -77,7 +78,7 @@ def standardize_names(pbp_df, roster, threshold=30):
 
     def match_players(df, lookup, player_col, team_col, id_col, standardized_col):
         results = []
-        for team, name in zip(df[team_col], df[player_col]):
+        for team, name in zip(df[team_col], df[player_col], strict=True):
             if pd.isna(name) or pd.isna(team):
                 results.append((None, None))
                 continue
@@ -96,7 +97,7 @@ def standardize_names(pbp_df, roster, threshold=30):
                 results.append((standardized_name, player_id))
             else:
                 results.append((None, None))
-        df[standardized_col], df[id_col] = zip(*results)
+        df[standardized_col], df[id_col] = zip(*results, strict=True)
 
     pbp_df = pbp_df.copy()
     match_players(pbp_df, roster_lookup, 'pitcher', 'pitch_team', 'pitcher_id', 'pitcher_standardized')
@@ -180,7 +181,7 @@ def melt_run_expectancy(df):
         var_name='outs',
         value_name='run_expectancy'
     )
-    melted['outs'] = melted['outs'].str.extract('(\d+)').astype(int)
+    melted['outs'] = melted['outs'].str.extract(r'(\d+)').astype(int)
     melted = melted[['bases', 'outs', 'run_expectancy']]
     return melted
 
@@ -478,9 +479,10 @@ def process_single_year(args):
     return final_df
 
 
-def main(data_dir, year):
+def main(data_dir, year, divisions=None):
     data_dir = Path(data_dir)
-    divisions = range(1, 4)
+    if divisions is None:
+        divisions = [1, 2, 3]
     all_pbp_data = []
 
     for division in divisions:
@@ -497,7 +499,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True,
                         help='Root directory containing the data folders')
-    parser.add_argument('--year', required=True)
+    parser.add_argument('--year', required=True, type=int)
+    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
+                        help='Divisions to process (default: 1 2 3)')
     args = parser.parse_args()
 
-    main(args.data_dir, args.year)
+    main(args.data_dir, args.year, args.divisions)

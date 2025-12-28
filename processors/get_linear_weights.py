@@ -1,11 +1,13 @@
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
 
 def calculate_college_linear_weights(pbp_data: pd.DataFrame, re24_matrix: pd.DataFrame) -> pd.DataFrame:
     event_types = ["walk", "hit_by_pitch", "single", "double", "triple", "home_run", "out", "other"]
-    event_counts = {e: 0 for e in event_types}
-    event_re24_sums = {e: 0.0 for e in event_types}
+    event_counts = dict.fromkeys(event_types, 0)
+    event_re24_sums = dict.fromkeys(event_types, 0.0)
 
     event_lookup = {
         "2": "out", "3": "out", "6": "out",
@@ -109,9 +111,11 @@ def calculate_normalized_linear_weights(linear_weights: pd.DataFrame, stats: pd.
     return pd.concat([lw, woba_scale_row], ignore_index=True)
 
 
-def main(data_dir: str, year: int):
-    for division in [1, 2, 3]:
-        div_name = {1: "d1", 2: "d2", 3: "d3"}[division]
+def main(data_dir: str, year: int, divisions: list = None):
+    if divisions is None:
+        divisions = [1, 2, 3]
+    for division in divisions:
+        div_name = f"d{division}"
         print(f"Processing division {division}...")
 
         pbp_path = Path(data_dir) / f"pbp/{div_name}_parsed_pbp_{year}.csv"
@@ -141,5 +145,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--divisions", nargs='+', type=int, default=[1, 2, 3],
+                        help='Divisions to process (default: 1 2 3)')
     args = parser.parse_args()
-    main(args.data_dir, args.year)
+    main(args.data_dir, args.year, args.divisions)

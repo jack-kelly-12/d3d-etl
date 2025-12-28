@@ -1,9 +1,9 @@
-from playwright.sync_api import sync_playwright
-import pandas as pd
+import argparse
 import time
 from pathlib import Path
-import argparse
-import re
+
+import pandas as pd
+from playwright.sync_api import sync_playwright
 
 BASE = "https://stats.ncaa.org"
 
@@ -27,7 +27,6 @@ def get_schedules(indir, div, year):
             return df
     return pd.DataFrame()
 
-import re
 
 def scrape_game_pbp(page, contest_id, div, year, max_retries=3):
     url = f"{BASE}/contests/{contest_id}/play_by_play"
@@ -74,11 +73,7 @@ def scrape_pbp(indir, outdir, year, divisions, batch_size=50, pause_between_game
     outdir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=r"C:\\Users\\jackkelly\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
-            headless=False,
-            channel="chrome"
-        )
+        browser = p.chromium.launch(headless=False)
         page = browser.new_page()
 
         for div in divisions:
@@ -125,8 +120,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1,2,3])
-    parser.add_argument("--indir", default="../new_data/schedules")
-    parser.add_argument("--outdir", default="../new_data/pbp")
+    parser.add_argument("--indir", default="../data/schedules")
+    parser.add_argument("--outdir", default="../data/pbp")
     args = parser.parse_args()
 
     scrape_pbp(

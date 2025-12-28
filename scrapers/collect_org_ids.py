@@ -1,15 +1,16 @@
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
-from tqdm import tqdm
-import time
-from pathlib import Path
 import json
 import logging
 import random
 import signal
 import sys
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,7 +161,6 @@ def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
         with tqdm(total=len(to_scrape)) as pbar:
             while to_scrape and not interrupt_handler.should_stop():
                 current_batch = list(to_scrape)[:10]
-                # Remove current batch from to_scrape
                 to_scrape = to_scrape - set(current_batch)
 
                 for url in current_batch:

@@ -1,39 +1,30 @@
-from playwright.sync_api import sync_playwright
-import pandas as pd
-import time
-from pathlib import Path
 import argparse
 import re
+import time
+from pathlib import Path
+
+import pandas as pd
+from playwright.sync_api import sync_playwright
 
 BASE = "https://stats.ncaa.org"
-DIV_LABELS = {1: "D-I", 2: "D-II", 3: "D-III"}
-
-def year_to_season(year: int) -> str:
-    return f"{year-1}-{str(year)[-2:]}"
 
 def scrape_schedules(team_ids_file, year, divisions, outdir, batch_size=10, max_retries=3):
-    season = year_to_season(year)
     teams = pd.read_csv(team_ids_file)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=r"C:\\Users\\jackkelly\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
-            headless=False,
-            channel="chrome"
-        )
+        browser = p.chromium.launch(headless=False)
         page = browser.new_page()
 
         for div in divisions:
-            div_label = DIV_LABELS[div]
-            teams_div = teams.query("season == @season and division == @div_label").copy()
+            teams_div = teams.query("year == @year and division == @div").copy()
             if teams_div.empty:
                 continue
 
             teams_div["team_id"] = teams_div["team_id"].astype(int)
             total_teams = len(teams_div)
-            print(f"\n=== {season} ({year}) {div_label} schedules — {total_teams} teams ===")
+            print(f"\n=== {year} D{div} schedules — {total_teams} teams ===")
 
             rows = []
 
@@ -91,7 +82,7 @@ def scrape_schedules(team_ids_file, year, divisions, outdir, batch_size=10, max_
                                     m = re.search(r"/contests/(\d+)", href)
                                     if m:
                                         contest_id = int(m.group(1))
-                
+
                                 rows.append({
                                     "year": year,
                                     "division": div,
@@ -127,10 +118,12 @@ def scrape_schedules(team_ids_file, year, divisions, outdir, batch_size=10, max_
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
+                df = df[df['division'] == div].copy()
+
                 fname = f"d{div}_schedules_{year}.csv"
                 fpath = outdir / fname
                 df.to_csv(fpath, index=False)
-                print(f"saved {fpath} ({len(df)} rows)")
+                print(f"saved {fpath} ({len(df)} rows) for division {div}")
 
 
         browser.close()
@@ -139,8 +132,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1,2,3])
-    parser.add_argument("--team_ids_file", default="../new_data/ncaa_team_history.csv")
-    parser.add_argument("--outdir", default="../new_data/schedules")
+    parser.add_argument("--team_ids_file", default="../data/ncaa_team_history.csv")
+    parser.add_argument("--outdir", default="../data/schedules")
     args = parser.parse_args()
 
     scrape_schedules(
