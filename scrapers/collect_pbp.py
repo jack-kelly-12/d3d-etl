@@ -1,5 +1,7 @@
 import argparse
+import re
 import time
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -27,12 +29,30 @@ def get_schedules(indir, div, year):
             return df
     return pd.DataFrame()
 
-
 def scrape_game_pbp(page, contest_id, div, year, max_retries=3):
     url = f"{BASE}/contests/{contest_id}/play_by_play"
     for retry in range(1, max_retries+1):
         try:
-            page.goto(url, timeout=45000)
+            page.goto(url, timeout=10000)
+            page.wait_for_selector("table", timeout=10000)
+
+            away_team_id, home_team_id = None, None
+            team_links = page.query_selector_all("a[href*='/teams/']")
+            team_ids = []
+            for link in team_links:
+                href = link.get_attribute("href")
+                if "/teams/" in href:
+                    m = re.search(r"/teams/(\d+)", href)
+                    if m:
+                        tid = int(m.group(1))
+                        if tid not in team_ids:
+                            team_ids.append(tid)
+                    if len(team_ids) >= 2:
+                        break
+            if len(team_ids) >= 2:
+                away_team_id = team_ids[0]
+                home_team_id = team_ids[1]
+
             tables = page.query_selector_all("table")
             if len(tables) < 4:
                 return pd.DataFrame()
@@ -40,13 +60,15 @@ def scrape_game_pbp(page, contest_id, div, year, max_retries=3):
             frames = []
             for i, tbl in enumerate(inning_tables, start=1):
                 html = tbl.inner_html()
-                df = pd.read_html(f"<table>{html}</table>")[0]
+                df = pd.read_html(StringIO(f"<table>{html}</table>"))[0]
                 if df.shape[1] >= 3:
                     df = df.rename(columns={df.columns[0]:"away_des", df.columns[2]:"home_des"})
                     df["inning"] = i
                     df["contest_id"] = contest_id
                     df["division"] = div
                     df["year"] = year
+                    df["away_team_id"] = away_team_id
+                    df["home_team_id"] = home_team_id
                     frames.append(df)
             if frames:
                 out = pd.concat(frames, ignore_index=True)
@@ -55,10 +77,13 @@ def scrape_game_pbp(page, contest_id, div, year, max_retries=3):
                 out["away_score"] = out["Score"].astype(str).str.extract(r"^(\d+)-")[0]
                 out["home_score"] = out["Score"].astype(str).str.extract(r"-(\d+)$")[0]
 
-                out = out[~((~out.away_text.isna()) & (~out.home_text.isna()))]
+                out = out[~((out.away_text != "") & (out.home_text != ""))]
+                out["away_team_id"] = out["away_team_id"].fillna("-")
+                out["home_team_id"] = out["home_team_id"].fillna("-")
 
                 return out[[
                     "division","year","contest_id","inning",
+                    "away_team_id","home_team_id",
                     "away_text","home_text","away_score","home_score"
                 ]]
             return pd.DataFrame()

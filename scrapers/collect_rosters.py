@@ -31,7 +31,6 @@ def scrape_rosters(team_ids_file, year, divisions, outdir, batch_size=10, pause_
                 team_id = row.team_id
                 school = row.school_name
                 conference = row.conference
-                division = div
 
                 url = f"{BASE}/teams/{team_id}/roster"
                 try:

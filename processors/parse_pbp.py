@@ -1,10 +1,8 @@
-import multiprocessing as mp
-import re
-from pathlib import Path
-
-import numpy as np
 import pandas as pd
-
+import numpy as np
+import re
+import multiprocessing as mp
+from pathlib import Path
 
 def stripwhite(x):
     if pd.isna(x):
@@ -572,10 +570,8 @@ def convert_to_legacy_cols(pbp: pd.DataFrame, sched: pd.DataFrame):
         "division": pick_right(merged, "division")
     })
 
-def main(data_dir: str, year: int, divisions: list = None):
-    if divisions is None:
-        divisions = [1, 2, 3]
-    for division in divisions:
+def main(data_dir: str, year: int):
+    for division in [1,2,3]:
         div_name = f"d{division}"
         input_path = Path(data_dir) / f"pbp/{div_name}_pbp_{year}.csv"
         sched_path = Path(data_dir) / f"schedules/{div_name}_schedules_{year}.csv"
@@ -599,9 +595,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True,
                         help='Root directory containing the data folders')
-    parser.add_argument('--year', required=True, type=int)
-    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
-                        help='Divisions to process (default: 1 2 3)')
+    parser.add_argument('--year', required=True)
     args = parser.parse_args()
 
-    main(args.data_dir, args.year, args.divisions)
+    main(args.data_dir, args.year)

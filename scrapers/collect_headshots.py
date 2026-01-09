@@ -1,18 +1,22 @@
+import argparse
 import asyncio
 from pathlib import Path
+import json
+import re
+from urllib.parse import urlparse, parse_qs, unquote
 
-import aiohttp
 import pandas as pd
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-DIRECTORY_API = "https://web3.ncaa.org/directory/api/directory/memberList?type=12&sportCode=MBA"
+
+OUTDIR = "/Users/jackkelly/Desktop/d3d-etl/data/headshots"
+
 
 async def fetch_school_list():
-    async with aiohttp.ClientSession() as session:
-        async with session.get(DIRECTORY_API) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+    with open("/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json", "r") as f:
+        return json.load(f)
+
 
 def ensure_https(base: str) -> str:
     if not base:
@@ -22,10 +26,12 @@ def ensure_https(base: str) -> str:
         base = "https://" + base
     return base.rstrip("/")
 
+
 def presto_season_slug(season: int) -> str:
     prev = season - 1
-    yy = str(season)[-2:]  # 2026 -> "26"
+    yy = str(season)[-2:]
     return f"{prev}-{yy}"
+
 
 def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
     """
@@ -38,12 +44,9 @@ def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
         (f"{base}/sports/bsb/{presto_season_slug(season)}/roster", "presto"),
     ]
 
+
 def detect_cms(html: str) -> str | None:
-    """
-    Lightweight detection based on distinctive assets/classes.
-    Returns "sidearm", "presto", or None.
-    """
-    h = html.lower()
+    h = (html or "").lower()
     if "presto-sport-static" in h or "theme-assets.prestosports.com" in h:
         return "presto"
     if "class=\"sidearm-" in h or "sidearm-" in h:
@@ -51,13 +54,50 @@ def detect_cms(html: str) -> str | None:
     return None
 
 
-def _txt(el):
-    return el.get_text(strip=True) if el else None
+def _txt(el) -> str | None:
+    if not el:
+        return None
+    s = " ".join(el.get_text(" ", strip=True).split())
+    return s if s else None
+
+
+def _strip_query(url: str | None) -> str | None:
+    if not url:
+        return None
+    return url.split("?")[0]
+
+
+def _strip_sidearm_crop(url: str | None) -> str | None:
+    """
+    Sidearm NextGen often uses:
+      https://images.sidearmdev.com/crop?url=<encoded real url>&width=...
+    Return the underlying image URL if present; else strip query params.
+    """
+    if not url:
+        return None
+    if "images.sidearmdev.com/crop" in url and "url=" in url:
+        try:
+            q = parse_qs(urlparse(url).query)
+            raw = q.get("url", [None])[0]
+            if raw:
+                return unquote(raw)
+        except Exception:
+            pass
+    return _strip_query(url)
+
+
+def _clean_field(x: str | None) -> str | None:
+    if not x:
+        return None
+    x = re.sub(r"\s+", " ", x).strip()
+    return x if x else None
+
 
 def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
-    rows = []
+    rows: list[dict] = []
 
+    # 1) Classic Sidearm player cards
     for p in soup.select(".sidearm-roster-player"):
         name_el = p.select_one(".sidearm-roster-player-name a, .sidearm-roster-player-name")
         number_el = p.select_one(".sidearm-roster-player-jersey-number")
@@ -74,26 +114,30 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
         img_url = None
         if img_el:
             src = img_el.get("data-src") or img_el.get("src")
-            if src:
-                img_url = src.split("?")[0]
+            img_url = _strip_sidearm_crop(src)
+
+        name = _txt(name_el)
+        if not name:
+            continue
 
         rows.append({
             "team": team,
             "year": season,
             "roster_url": url,
-            "name": name_el.get_text(strip=True) if name_el else None,
-            "number": number_el.get_text(strip=True) if number_el else None,
-            "position": pos_el.get_text(strip=True) if pos_el else None,
-            "height": height_el.get_text(strip=True) if height_el else None,
-            "weight": weight_el.get_text(strip=True) if weight_el else None,
-            "class": year_el.get_text(strip=True) if year_el else None,
-            "b_t": bt_el.get_text(strip=True) if bt_el else None,
-            "hometown": hometown_el.get_text(strip=True) if hometown_el else None,
-            "highschool": hs_el.get_text(strip=True) if hs_el else None,
-            "previous_school": prev_el.get_text(strip=True) if prev_el else None,
+            "name": name,
+            "number": _clean_field(_txt(number_el)),
+            "position": _clean_field(_txt(pos_el)),
+            "height": _clean_field(_txt(height_el)),
+            "weight": _clean_field(_txt(weight_el)),
+            "class": _clean_field(_txt(year_el)),
+            "b_t": _clean_field(_txt(bt_el)),
+            "hometown": _clean_field(_txt(hometown_el)),
+            "highschool": _clean_field(_txt(hs_el)),
+            "previous_school": _clean_field(_txt(prev_el)),
             "img_url": img_url,
         })
 
+    # 2) Classic Sidearm roster table
     if not rows:
         for tr in soup.select("table.sidearm-table tbody tr"):
             name_el = tr.select_one(".sidearm-table-player-name a, .sidearm-table-player-name")
@@ -110,50 +154,99 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
             img_url = None
             if img_el:
                 src = img_el.get("data-src") or img_el.get("src")
-                if src:
-                    img_url = src.split("?")[0]
+                img_url = _strip_sidearm_crop(src)
+
+            name = _txt(name_el)
+            if not name:
+                continue
 
             rows.append({
                 "team": team,
                 "year": season,
                 "roster_url": url,
-                "name": name_el.get_text(strip=True) if name_el else None,
-                "number": num_el.get_text(strip=True) if num_el else None,
-                "position": pos_el.get_text(strip=True) if pos_el else None,
-                "height": ht_el.get_text(strip=True) if ht_el else None,
-                "weight": wt_el.get_text(strip=True) if wt_el else None,
-                "class": year_el.get_text(strip=True) if year_el else None,
-                "b_t": bt_el.get_text(strip=True) if bt_el else None,
-                "hometown": home_el.get_text(strip=True) if home_el else None,
+                "name": name,
+                "number": _clean_field(_txt(num_el)),
+                "position": _clean_field(_txt(pos_el)),
+                "height": _clean_field(_txt(ht_el)),
+                "weight": _clean_field(_txt(wt_el)),
+                "class": _clean_field(_txt(year_el)),
+                "b_t": _clean_field(_txt(bt_el)),
+                "hometown": _clean_field(_txt(home_el)),
                 "highschool": None,
-                "previous_school": prev_el.get_text(strip=True) if prev_el else None,
+                "previous_school": _clean_field(_txt(prev_el)),
+                "img_url": img_url,
+            })
+
+    # 3) NEW: Sidearm NextGen roster cards (Rice uses this)
+    if not rows:
+        for card in soup.select('div[data-test-id="s-person-card-list__root"]'):
+            name_el = card.select_one("h3")
+            name = _txt(name_el)
+            if not name:
+                continue
+
+            # Jersey number: either the stamp text, or in a stamp container near it
+            number = None
+            stamp_sr = card.select_one('[data-test-id="s-person-thumbnail__stamp-sr-only-text"]')
+            if stamp_sr and stamp_sr.parent:
+                raw = _txt(stamp_sr.parent)
+                if raw:
+                    number = raw.replace("Jersey Number", "").strip()
+            if not number:
+                stamp_text = card.select_one(".s-stamp__text")
+                number = _txt(stamp_text)
+
+            pos_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-position-short"]')
+            class_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-title"]')
+            height_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-season"]')
+            weight_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-weight"]')
+
+            hometown_el = card.select_one('[data-test-id="s-person-card-list__content-location-person-hometown"]')
+            hs_el = card.select_one('[data-test-id="s-person-card-list__content-location-person-high-school"]')
+
+            img_el = card.select_one('img[data-test-id="s-image-resized__img"], img')
+            img_url = None
+            if img_el:
+                src = img_el.get("src") or img_el.get("data-src")
+                img_url = _strip_sidearm_crop(src)
+
+            rows.append({
+                "team": team,
+                "year": season,
+                "roster_url": url,
+                "name": name,
+                "number": _clean_field(number),
+                "position": _clean_field(_txt(pos_el)),
+                "height": _clean_field(_txt(height_el)),
+                "weight": _clean_field(_txt(weight_el)),
+                "class": _clean_field(_txt(class_el)),
+                "b_t": None,
+                "hometown": _clean_field(_txt(hometown_el)),
+                "highschool": _clean_field(_txt(hs_el)),
+                "previous_school": None,
                 "img_url": img_url,
             })
 
     return rows
 
+
 def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
-    """
-    Presto templates vary a bit, so we try a few common patterns.
-    Fallback: find player links containing '/players/'.
-    """
     soup = BeautifulSoup(html, "html.parser")
     rows = []
 
-    # Heuristic 1: Card/list items commonly used by Presto themes
     blocks = soup.select(
         ".ps-roster__item, .ps_roster__item, .roster__player, .roster-player, "
         "li[class*='roster'], .athlete, .person, .card:has(a[href*='/players/'])"
     )
     if not blocks:
-        # Heuristic 2: any anchor that looks like a player bio link
         cand_links = soup.select("a[href*='/players/']")
         for a in cand_links:
             name = _txt(a)
             if not name:
                 continue
-            # try to find an image nearby (parent card/list item)
+
             parent = a
+            img = None
             for _ in range(3):
                 parent = parent.parent
                 if parent is None:
@@ -161,10 +254,8 @@ def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
                 img_el = parent.select_one("img")
                 if img_el:
                     img = img_el.get("data-src") or img_el.get("src")
-                    img = img.split("?")[0] if img else None
+                    img = _strip_query(img) if img else None
                     break
-            else:
-                img = None
 
             rows.append({
                 "team": team,
@@ -200,8 +291,7 @@ def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
         img_url = None
         if img_el:
             src = img_el.get("data-src") or img_el.get("src")
-            if src:
-                img_url = src.split("?")[0]
+            img_url = _strip_query(src) if src else None
 
         name = _txt(name_el)
         if not name:
@@ -212,30 +302,43 @@ def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
             "year": season,
             "roster_url": url,
             "name": name,
-            "number": _txt(number_el),
-            "position": _txt(pos_el),
-            "height": _txt(height_el),
-            "weight": _txt(weight_el),
-            "class": _txt(year_el),
-            "b_t": _txt(bt_el),
-            "hometown": _txt(hometown_el),
-            "highschool": _txt(hs_el),
-            "previous_school": _txt(prev_el),
+            "number": _clean_field(_txt(number_el)),
+            "position": _clean_field(_txt(pos_el)),
+            "height": _clean_field(_txt(height_el)),
+            "weight": _clean_field(_txt(weight_el)),
+            "class": _clean_field(_txt(year_el)),
+            "b_t": _clean_field(_txt(bt_el)),
+            "hometown": _clean_field(_txt(hometown_el)),
+            "highschool": _clean_field(_txt(hs_el)),
+            "previous_school": _clean_field(_txt(prev_el)),
             "img_url": img_url,
         })
+
     return rows
+
 
 async def fetch_html(browser, url: str) -> tuple[str | None, int]:
     page = await browser.new_page()
     try:
         resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
         status = resp.status if resp else 0
+
+        # Helps some NextGen pages finish rendering the roster cards
+        try:
+            await page.wait_for_selector(
+                'div[data-test-id="s-person-card-list__root"], .sidearm-roster-player, table.sidearm-table',
+                timeout=6000,
+            )
+        except Exception:
+            pass
+
         html = await page.content()
         await page.close()
         return html, status
     except Exception:
         await page.close()
         return None, 0
+
 
 async def scrape_team(browser, base: str, team_name: str, season: int) -> list[dict]:
     candidates = build_candidate_urls(base, season)
@@ -265,7 +368,8 @@ async def scrape_team(browser, base: str, team_name: str, season: int) -> list[d
     print(f"  🚫 {team_name}: no working roster URL")
     return []
 
-async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdir="../data"):
+
+async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdir=OUTDIR, team_name=None):
     schools = await fetch_school_list()
 
     roster_targets = []
@@ -275,7 +379,12 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
             continue
         roster_targets.append((base, s["nameOfficial"]))
 
-    if limit:
+    if team_name:
+        roster_targets = [(b, t) for (b, t) in roster_targets if t == team_name]
+        if not roster_targets:
+            print(f"❌ Team '{team_name}' not found in school list")
+            return pd.DataFrame()
+    elif limit:
         roster_targets = roster_targets[:limit]
 
     outdir = Path(outdir)
@@ -285,7 +394,8 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
     skip = set()
     if missing_only and outpath.exists():
         existing = pd.read_csv(outpath)
-        done = existing.loc[existing["season"] == season, "team"].dropna().unique().tolist()
+        existing["year"] = pd.to_numeric(existing["year"], errors="coerce")
+        done = existing.loc[existing["year"] == int(season), "team"].dropna().unique().tolist()
         skip = set(done)
         print(f"⏭️  Skipping {len(skip)} teams already saved for {season}")
 
@@ -297,7 +407,7 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
         browser = await p.chromium.launch(headless=True)
 
         for i in range(0, len(filtered), batch_size):
-            batch = filtered[i:i+batch_size]
+            batch = filtered[i:i + batch_size]
             tasks = [scrape_team(browser, base, team, season) for base, team in batch]
             results = await asyncio.gather(*tasks)
             for rows in results:
@@ -317,6 +427,22 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
     print(f"📦 Saved {len(df)} rows across {df['team'].nunique() if not df.empty else 0} teams → {outpath}")
     return df
 
+
 if __name__ == "__main__":
-    for season in range(2021, 2026):
-        df = asyncio.run(main(season=season, batch_size=10, missing_only=True, outdir="../data"))
+    parser = argparse.ArgumentParser(description="Scrape team roster headshots")
+    parser.add_argument("--season", type=int, default=2025, help="Season year")
+    parser.add_argument("--team", type=str, default=None, help="Specific team name to scrape")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of teams")
+    parser.add_argument("--batch-size", type=int, default=10, help="Batch size for concurrent requests")
+    parser.add_argument("--missing-only", action="store_true", help="Only scrape missing teams")
+    parser.add_argument("--outdir", type=str, default=OUTDIR, help="Output directory")
+    args = parser.parse_args()
+
+    df = asyncio.run(main(
+        season=args.season,
+        team_name=args.team,
+        limit=args.limit,
+        batch_size=args.batch_size,
+        missing_only=args.missing_only,
+        outdir=args.outdir
+    ))

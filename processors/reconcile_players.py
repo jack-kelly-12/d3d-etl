@@ -8,60 +8,129 @@ import pandas as pd
 from rapidfuzz import fuzz, process
 
 
-def clean_name(name: str) -> str:
-    if pd.isna(name):
+_MISSING = {"", "-", "—", "–", "na", "n/a", "none", "null", "nan"}
+
+
+def _s(x) -> str:
+    if pd.isna(x):
         return ""
-    s = unicodedata.normalize("NFKC", str(name))
-    s = re.sub(r"^(?:[^\w]*|No\.?|Number)?\s*\d{1,3}[-–—.: ]*", "", s, flags=re.IGNORECASE)
+    return str(x)
+
+
+def is_missing(x) -> bool:
+    s = _s(x).strip().lower()
+    return s in _MISSING
+
+
+def norm_missing(x) -> str:
+    return "" if is_missing(x) else _s(x).strip()
+
+
+def clean_name(name: str) -> str:
+    s = unicodedata.normalize("NFKC", _s(name))
+    s = re.sub(r"^\s*(?:no\.?|number)?\s*\d{1,3}\s*[-–—.:]\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^\s*\d{1,3}\s+", "", s)
+    s = re.sub(r"^\s*\d{1,3}(?=[A-Za-z])", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s.title()
 
-def normalize_name(name: str) -> str:
-    if pd.isna(name):
+
+def clean_high_school(x: str) -> str:
+    s = norm_missing(x)
+    if not s:
         return ""
-    name = re.sub(r"^\d+", "", str(name)).strip()
-    name = re.sub(r"[^\w\s]", "", name)
-    return name.lower()
+
+    s = unicodedata.normalize("NFKC", s)
+
+    s = re.split(
+        r"\b(?:previous|prev|last)\s*school\s*:?|\b(?:previous|prev)\s*sch(?:ool)?\s*:?|\blast\s*sch(?:ool)?\s*:?",
+        s,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    s = re.split(r"\bprev\.?\s*school\b\s*[:\-–—]", s, maxsplit=1, flags=re.IGNORECASE)[0]
+    s = re.split(r"\bprevious\s*school\b\s*[:\-–—]", s, maxsplit=1, flags=re.IGNORECASE)[0]
+    s = re.split(r"\blast\s*school\b\s*[:\-–—]", s, maxsplit=1, flags=re.IGNORECASE)[0]
+
+    s = re.sub(r"\s+", " ", s).strip(" \t\r\n-–—:;|,")
+    return s
+
+def normalize_name(name: str) -> str:
+    s = _s(name)
+    s = re.sub(r"^\s*\d{1,3}\s*", "", s)
+    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
 
 def get_base_url(url: str) -> str:
-    parsed = urlparse(url if isinstance(url, str) else "")
+    parsed = urlparse(_s(url))
     if not parsed.scheme or not parsed.netloc:
         return ""
     return f"{parsed.scheme}://{parsed.netloc}"
 
+
 def normalize_b_t(bt: str) -> str:
-    if pd.isna(bt) or not str(bt).strip():
+    s = unicodedata.normalize("NFKC", _s(bt)).upper().strip()
+    if not s or is_missing(s):
         return ""
-    s = unicodedata.normalize("NFKC", str(bt)).upper().strip()
-    s = re.sub(r"[^LRSH/]", "", s)
-    parts = re.split(r"[^\w]+|/", s)
-    parts = [p for p in parts if p]
-    if len(parts) >= 2:
-        return f"{parts[0][0]}/{parts[1][0]}"
-    if len(parts) == 1:
-        return f"{parts[0][0]}/{parts[0][0]}"
+
+    s = s.replace("\\", "/").replace("|", "/")
+    s = re.sub(r"\s+", "", s)
+
+    m = re.match(r"^([LRSH])/?([LRSH])$", s)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+
+    letters = re.findall(r"[LRSH]", s)
+    if len(letters) >= 2:
+        return f"{letters[0]}/{letters[1]}"
+    if len(letters) == 1:
+        return f"{letters[0]}/{letters[0]}"
     return ""
 
+
 _POS_MAP = {
-    "CATCHER":"C","C":"C",
-    "FIRST BASE":"1B","1B":"1B",
-    "SECOND BASE":"2B","2B":"2B",
-    "THIRD BASE":"3B","3B":"3B",
-    "SHORTSTOP":"SS","SS":"SS",
-    "LEFT FIELD":"LF","LF":"LF",
-    "CENTER FIELD":"CF","CF":"CF",
-    "RIGHT FIELD":"RF","RF":"RF",
-    "OUTFIELD":"OF","OF":"OF",
-    "INFIELD":"INF","IF":"INF","INF":"INF",
-    "PITCHER":"P","RHP":"P","LHP":"P","P":"P",
-    "DESIGNATED HITTER":"DH","DH":"DH",
-    "UTILITY":"UT","UTIL":"UT","UT":"UT"
+    "CATCHER": "C",
+    "C": "C",
+    "FIRST BASE": "1B",
+    "1B": "1B",
+    "SECOND BASE": "2B",
+    "2B": "2B",
+    "THIRD BASE": "3B",
+    "3B": "3B",
+    "SHORTSTOP": "SS",
+    "SS": "SS",
+    "LEFT FIELD": "LF",
+    "LF": "LF",
+    "CENTER FIELD": "CF",
+    "CF": "CF",
+    "RIGHT FIELD": "RF",
+    "RF": "RF",
+    "OUTFIELD": "OF",
+    "OF": "OF",
+    "INFIELD": "INF",
+    "IF": "INF",
+    "INF": "INF",
+    "PITCHER": "P",
+    "RHP": "P",
+    "LHP": "P",
+    "P": "P",
+    "DESIGNATED HITTER": "DH",
+    "DH": "DH",
+    "UTILITY": "UT",
+    "UTIL": "UT",
+    "UT": "UT",
 }
+
+
 def standardize_pos(pos: str) -> str:
-    if pd.isna(pos) or not str(pos).strip():
+    s = unicodedata.normalize("NFKC", _s(pos)).upper().strip()
+    if not s or is_missing(s):
         return ""
-    s = unicodedata.normalize("NFKC", str(pos)).upper()
     s = re.sub(r"[.\s]+", " ", s).strip()
+
     parts = re.split(r"[/,;]| OR ", s)
     out = []
     for p in parts:
@@ -69,6 +138,7 @@ def standardize_pos(pos: str) -> str:
         if not p:
             continue
         out.append(_POS_MAP.get(p, _POS_MAP.get(p.replace(" ", ""), p)))
+
     out = [o for o in out if o]
     out = list(dict.fromkeys(out))
     if not out:
@@ -77,178 +147,187 @@ def standardize_pos(pos: str) -> str:
         return out[0]
     return "/".join(out[:3])
 
+
 def load_rosters(data_dir: Path, year: int, division: int) -> pd.DataFrame:
     roster_path = data_dir / "rosters" / f"d{division}_rosters_{year}.csv"
     rosters = pd.read_csv(roster_path)
-    name_series = rosters["player_name"] if "player_name" in rosters.columns else pd.Series([""] * len(rosters))
-    rosters["player_name_norm"] = name_series.map(normalize_name)
-    if "number" not in rosters.columns and "jersey" in rosters.columns:
-        rosters["number"] = rosters["jersey"]
-    if "b_t" not in rosters.columns and ("bats" in rosters.columns or "throws" in rosters.columns):
-        bats = rosters.get("bats", pd.Series([pd.NA] * len(rosters))).astype(str).str.upper().str[:1].replace({"N": pd.NA, "0": pd.NA})
-        throws = rosters.get("throws", pd.Series([pd.NA] * len(rosters))).astype(str).str.upper().str[:1].replace({"N": pd.NA, "0": pd.NA})
-        rosters["b_t"] = (bats.fillna("") + "/" + throws.fillna("")).str.strip("/")
-    if "pos" in rosters.columns:
-        rosters["pos"] = rosters["pos"].map(standardize_pos)
+
+    rosters["player_name_norm"] = rosters["player_name"].map(normalize_name)
+    rosters["b_t"] = (rosters["bats"].map(lambda x: _s(x).upper()[:1]) + "/" + rosters["throws"].map(lambda x: _s(x).upper()[:1]))
+    rosters["b_t"] = rosters["b_t"].map(normalize_b_t)
+    rosters["pos"] = rosters["position"].map(standardize_pos)
+
+    # normalize placeholders
+    rosters["img_url"] = rosters["img_url"].map(norm_missing)
+    rosters["hometown"] = rosters["hometown"].map(norm_missing)
+    rosters["high_school"] = rosters["high_school"].map(clean_high_school)
+    rosters["height"] = rosters["height"].map(norm_missing)
+    rosters["weight"] = rosters["weight"].map(norm_missing)
+
     return rosters
+
 
 def load_headshots(data_dir: Path, year: int) -> pd.DataFrame:
     hfiles = glob.glob(str(data_dir / "headshots" / f"*{year}*.csv"))
     if not hfiles:
-        return pd.DataFrame(columns=["team_name","name","number","img_url","roster_url","height","weight","hometown","b_t","pos","season"])
+        return pd.DataFrame(
+            columns=[
+                "team", "year", "roster_url", "name", "number", "position", "height", "weight",
+                "class", "b_t", "hometown", "highschool", "previous_school", "img_url"
+            ]
+        )
+
     hs = []
     for f in hfiles:
-        df = pd.read_csv(f)
-        if "Unnamed: 0" in df.columns:
-            df = df.drop(columns=["Unnamed: 0"])
-        df["season"] = year
+        df = pd.read_csv(f).drop(columns=["Unnamed: 0"], errors="ignore")
         hs.append(df)
+
     tr = pd.concat(hs, ignore_index=True)
-    try:
-        mappings = pd.read_csv(data_dir / "team_mappings.csv")
-        if "school_name_official" in mappings.columns and "ncaa_team" in mappings.columns:
-            tr_team_key = None
-            for c in ("school_name_official", "team", "team_name", "school_name"):
-                if c in tr.columns:
-                    tr_team_key = c
-                    break
-            if tr_team_key is not None:
-                tr = tr.merge(
-                    mappings[["school_name_official", "ncaa_team"]],
-                    left_on=tr_team_key,
-                    right_on="school_name_official",
-                    how="left"
-                )
-                tr["team_name"] = tr["ncaa_team"]
-                tr = tr.drop(columns=[col for col in ["school_name_official", "ncaa_team"] if col in tr.columns])
-        else:
-            if "team" in tr.columns and "team_name" not in tr.columns:
-                tr["team_name"] = tr["team"]
-    except Exception:
-        if "team" in tr.columns and "team_name" not in tr.columns:
-            tr["team_name"] = tr["team"]
-    if "name" in tr.columns:
-        name_series = tr["name"]
-    elif "player" in tr.columns:
-        name_series = tr["player"]
-    else:
-        name_series = pd.Series([""] * len(tr))
-    tr["name_clean"] = name_series.map(clean_name)
+
+    map_path = data_dir / "team_mappings.csv"
+    if map_path.exists():
+        mappings = pd.read_csv(map_path)
+        if {"school_name_official", "ncaa_team"}.issubset(mappings.columns):
+            tr = tr.merge(
+                mappings[["school_name_official", "ncaa_team"]],
+                left_on="team",
+                right_on="school_name_official",
+                how="left",
+            )
+            tr["team"] = tr["ncaa_team"].fillna(tr["team"])
+            tr = tr.drop(columns=["school_name_official", "ncaa_team"], errors="ignore")
+
+    tr["name_clean"] = tr["name"].map(clean_name)
     tr["tr_name_norm"] = tr["name_clean"].map(normalize_name)
-    if "pos" in tr.columns:
-        tr["pos"] = tr["pos"].map(standardize_pos)
-    if "b_t" in tr.columns:
-        tr["b_t"] = tr["b_t"].map(normalize_b_t)
+
+    tr["img_url"] = tr["img_url"].map(norm_missing)
+    tr["b_t"] = tr["b_t"].map(normalize_b_t)
+    tr["pos"] = tr["position"].map(standardize_pos)
+    tr["hometown"] = tr["hometown"].map(norm_missing)
+    tr["high_school"] = tr["highschool"].map(clean_high_school)
+    tr["height"] = tr["height"].map(norm_missing)
+    tr["weight"] = tr["weight"].map(norm_missing)
+
     return tr
 
+
 def build_headshot_matches(rosters: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
+    if rosters.empty or tr.empty:
+        return pd.DataFrame(columns=["player_id", "img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"])
+
+    # only keep rows that actually have an image URL (treat '-' as missing)
+    tr = tr[tr["img_url"].map(lambda x: not is_missing(x))].copy()
+    if tr.empty:
+        return pd.DataFrame(columns=["player_id", "img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"])
+
+    ros_players = rosters[["player_id", "player_name_norm", "number", "team_name"]].copy()
+    ros_players["number"] = ros_players["number"].astype(str).str.strip()
+
     matches = []
-    if "team_name" not in tr.columns:
-        return pd.DataFrame(columns=["player_id","img_url","b_t","hometown","high_school","height","weight","pos"])
-    for team, group in tr.groupby("team_name"):
-        ros_sub = rosters[rosters.get("team_name", "") == team].copy()
+
+    for team, group in tr.groupby("team", dropna=False):
+        team = _s(team).strip()
+        ros_sub = ros_players[ros_players["team_name"].astype(str).str.strip() == team]
         if ros_sub.empty:
             continue
-        base_cols = ["player_id","player_name_norm"]
-        if "number" in ros_sub.columns:
-            base_cols.append("number")
-        ros_players = ros_sub[base_cols].copy()
+
         for _, tr_row in group.iterrows():
-            tname = tr_row.get("tr_name_norm", "")
-            tnum = str(tr_row.get("number", "")).strip()
-            img_url = tr_row.get("img_url", "")
-            base = get_base_url(tr_row.get("roster_url", ""))
-            if isinstance(img_url, str) and img_url.startswith("/") and base:
-                img_url = base + img_url
-            direct = ros_players[ros_players["player_name_norm"] == tname]
-            if "number" in ros_players.columns and tnum:
-                if len(direct) > 1:
-                    direct = direct[direct["number"].astype(str) == tnum]
-            if not direct.empty:
-                r = direct.iloc[0]
-                matches.append((r.player_id, img_url, tr_row.get("b_t", pd.NA), tr_row.get("hometown", pd.NA), None, tr_row.get("height", pd.NA), tr_row.get("weight", pd.NA), tr_row.get("pos", pd.NA)))
+            tname = _s(tr_row["tr_name_norm"]).strip()
+            if not tname:
                 continue
-            cand = process.extractOne(tname, ros_players["player_name_norm"], scorer=fuzz.WRatio)
-            if cand and cand[1] >= 90:
-                rsub = ros_players[ros_players["player_name_norm"] == cand[0]]
-                if "number" in ros_players.columns and tnum and len(rsub) > 1:
-                    rsub = rsub[rsub["number"].astype(str) == tnum]
-                if not rsub.empty:
-                    r = rsub.iloc[0]
-                    matches.append((r.player_id, img_url, tr_row.get("b_t", pd.NA), tr_row.get("hometown", pd.NA), None, tr_row.get("height", pd.NA), tr_row.get("weight", pd.NA), tr_row.get("pos", pd.NA)))
-    if not matches:
-        return pd.DataFrame(columns=["player_id","img_url","b_t","hometown","high_school","height","weight","pos"])
-    out = pd.DataFrame(matches, columns=["player_id","img_url","b_t","hometown","high_school","height","weight","pos"])
+
+            img_url = _s(tr_row["img_url"]).strip()
+            if is_missing(img_url):
+                continue
+
+            base = get_base_url(tr_row["roster_url"])
+            if img_url.startswith("/") and base:
+                img_url = base + img_url
+
+            tnum = _s(tr_row["number"]).strip()
+
+            direct = ros_sub[ros_sub["player_name_norm"] == tname]
+            if tnum and len(direct) > 1:
+                direct = direct[direct["number"] == tnum]
+
+            if direct.empty:
+                cand = process.extractOne(tname, ros_sub["player_name_norm"], scorer=fuzz.WRatio)
+                if not cand or cand[1] < 90:
+                    continue
+                direct = ros_sub[ros_sub["player_name_norm"] == cand[0]]
+                if tnum and len(direct) > 1:
+                    direct = direct[direct["number"] == tnum]
+
+            if direct.empty:
+                continue
+
+            r = direct.iloc[0]
+            matches.append(
+                (
+                    r["player_id"],
+                    img_url,
+                    tr_row["b_t"],
+                    tr_row["hometown"],
+                    tr_row["high_school"],
+                    tr_row["height"],
+                    tr_row["weight"],
+                    tr_row["pos"],
+                )
+            )
+
+    out = pd.DataFrame(matches, columns=["player_id", "img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"])
     out = out.drop_duplicates(subset=["player_id"], keep="first")
     return out
 
+
 def enrich_rosters_with_headshots(rosters: pd.DataFrame, hs: pd.DataFrame) -> pd.DataFrame:
     merged = rosters.merge(hs, on="player_id", how="left", suffixes=("", "_hs"))
-    if "img_url" not in merged.columns and "img" in merged.columns:
-        merged.rename(columns={"img": "img_url"}, inplace=True)
 
-    def fill_preferring_base_then_hs(target: str):
-        if target not in merged:
-            merged[target] = pd.NA
-        hs_col = f"{target}_hs"
-        src = None
-        if hs_col in merged:
-            src = hs_col
-        elif target in merged and target not in rosters.columns:
-            src = target
-        if src is not None:
-            merged[target] = merged[target].where(
-                merged[target].notna() & (merged[target].astype(str).str.strip() != ""),
-                merged[src]
-            )
+    def take(roster_col: str) -> None:
+        hs_col = f"{roster_col}_hs"
+        merged[roster_col] = merged[roster_col].map(norm_missing)
+        merged[hs_col] = merged[hs_col].map(norm_missing)
+        merged[roster_col] = merged[roster_col].where(~merged[roster_col].map(is_missing), merged[hs_col])
 
     for col in ["img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"]:
-        fill_preferring_base_then_hs(col)
+        take(col)
 
     merged = merged.drop(columns=[c for c in merged.columns if c.endswith("_hs")], errors="ignore")
-    if "b_t" in merged.columns:
-        merged["b_t"] = merged["b_t"].map(normalize_b_t)
-    if "pos" in merged.columns:
-        merged["pos"] = merged["pos"].map(standardize_pos)
-    if "img_url" in merged.columns:
-        merged["img_url"] = merged["img_url"].fillna("")
+    merged["b_t"] = merged["b_t"].map(normalize_b_t)
+    merged["pos"] = merged["pos"].map(standardize_pos)
+    merged["img_url"] = merged["img_url"].map(norm_missing)
+
     return merged
+
 
 def main(data_dir: str, year: int):
     data_dir = Path(data_dir)
     headshots = load_headshots(data_dir, year)
 
-    outputs = []
-    for division in [1, 2, 3]:
-        try:
-            rosters = load_rosters(data_dir, year, division)
-        except FileNotFoundError:
+    for division in (1, 2, 3):
+        roster_path = data_dir / "rosters" / f"d{division}_rosters_{year}.csv"
+        if not roster_path.exists():
             print(f"No roster file for d{division} {year}, skipping")
             continue
-        tr_subset = headshots
-        if not headshots.empty:
-            tr_subset = headshots.copy()
-            img_col = "img_url" if "img_url" in tr_subset.columns else None
-            if img_col is not None:
-                tr_subset = tr_subset[tr_subset[img_col].astype(str).str.strip() != ""]
 
-            if "team_name" in tr_subset.columns and "team_name" in rosters.columns:
-                teams = rosters["team_name"].dropna().astype(str).str.strip().unique().tolist()
-                tr_subset = tr_subset[tr_subset["team_name"].astype(str).str.strip().isin(teams)].copy()
+        rosters = load_rosters(data_dir, year, division)
+
+        teams = set(rosters["team_name"].astype(str).str.strip().unique().tolist())
+        tr_subset = headshots[headshots["team"].astype(str).str.strip().isin(teams)].copy()
 
         hs_matches = build_headshot_matches(rosters, tr_subset)
         enriched = enrich_rosters_with_headshots(rosters, hs_matches)
+
         outpath = data_dir / "rosters" / f"d{division}_rosters_{year}.csv"
         enriched.to_csv(outpath, index=False)
         print(f"wrote {outpath}")
-        outputs.append(outpath)
 
-    return outputs
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", required=True)
-    parser.add_argument("--year", required=True)
+    parser.add_argument("--year", required=True, type=int)
     args = parser.parse_args()
     main(args.data_dir, args.year)

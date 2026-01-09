@@ -3,8 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-YEARS = [2021, 2022, 2023, 2024, 2025]
-DIVISIONS = [1, 2, 3]
+# YEARS = [2021, 2022, 2023, 2024, 2025]
+# DIVISIONS = [1, 2, 3]
+YEARS = [2025]
+DIVISIONS = [1]
 
 def run(cmd, outfile, skip):
     if skip and outfile.exists():
@@ -21,21 +23,20 @@ def main():
     for year in YEARS:
         for div in DIVISIONS:
             sched_file = Path(f"../data/schedules/d{div}_schedules_{year}.csv")
-            stats_file_b = Path(f"../data/stats/d{div}_batting_{year}.csv")
             pbp_file = Path(f"../data/pbp/d{div}_pbp_{year}.csv")
 
-            run([sys.executable, "collect_schedules.py",
-                 "--year", str(year),
-                 "--divisions", str(div),
-                 "--team_ids_file", "../data/ncaa_team_history.csv",
-                 "--outdir", "../data/schedules"],
-                sched_file, args.skip_existing)
+            # run([sys.executable, "collect_schedules.py",
+            #      "--year", str(year),
+            #      "--divisions", str(div),
+            #      "--team_ids_file", "../data/ncaa_team_history.csv",
+            #      "--outdir", "../data/schedules"],
+            #     sched_file, args.skip_existing)
 
-            run([sys.executable, "collect_stats.py",
-                 "--year", str(year),
-                 "--divisions", str(div),
-                 "--team_ids_file", "../data/ncaa_team_history.csv",
-                 "--outdir", "../data/stats"], args.skip_existing)
+            # run([sys.executable, "collect_stats.py",
+            #      "--year", str(year),
+            #      "--divisions", str(div),
+            #      "--team_ids_file", "../data/ncaa_team_history.csv",
+            #      "--outdir", "../data/stats"], args.skip_existing)
 
             run([sys.executable, "collect_pbp.py",
                  "--year", str(year),
