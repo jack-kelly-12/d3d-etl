@@ -3,9 +3,9 @@ import time
 from pathlib import Path
 
 import pandas as pd
+from constants import BASE
 from playwright.sync_api import sync_playwright
 
-BASE = "https://stats.ncaa.org"
 START_URL = f"{BASE}/teams/history?org_id=141&sport_code=MBA"
 
 def scrape_team_history(outdir, batch_size=25, pause_between_batches=1):

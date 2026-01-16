@@ -1,20 +1,18 @@
 import argparse
 import asyncio
-from pathlib import Path
 import json
 import re
-from urllib.parse import urlparse, parse_qs, unquote
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pandas as pd
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-
 OUTDIR = "/Users/jackkelly/Desktop/d3d-etl/data/headshots"
 
-
 async def fetch_school_list():
-    with open("/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json", "r") as f:
+    with open("/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json") as f:
         return json.load(f)
 
 
@@ -177,7 +175,6 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
                 "img_url": img_url,
             })
 
-    # 3) NEW: Sidearm NextGen roster cards (Rice uses this)
     if not rows:
         for card in soup.select('div[data-test-id="s-person-card-list__root"]'):
             name_el = card.select_one("h3")
@@ -185,7 +182,6 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
             if not name:
                 continue
 
-            # Jersey number: either the stamp text, or in a stamp container near it
             number = None
             stamp_sr = card.select_one('[data-test-id="s-person-thumbnail__stamp-sr-only-text"]')
             if stamp_sr and stamp_sr.parent:
@@ -323,7 +319,6 @@ async def fetch_html(browser, url: str) -> tuple[str | None, int]:
         resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
         status = resp.status if resp else 0
 
-        # Helps some NextGen pages finish rendering the roster cards
         try:
             await page.wait_for_selector(
                 'div[data-test-id="s-person-card-list__root"], .sidearm-roster-player, table.sidearm-table',

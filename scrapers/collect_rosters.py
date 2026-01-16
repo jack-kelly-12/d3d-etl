@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
-BASE = "https://stats.ncaa.org"
+from .constants import BASE
+
 
 def scrape_rosters(team_ids_file, year, divisions, outdir, batch_size=10, pause_between_batches=2):
     teams = pd.read_csv(team_ids_file)

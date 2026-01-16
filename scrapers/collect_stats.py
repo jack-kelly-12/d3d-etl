@@ -6,7 +6,8 @@ from pathlib import Path
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
-BASE = "https://stats.ncaa.org"
+from .constants import BASE
+
 
 def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
@@ -24,7 +25,7 @@ def parse_table(table, year, school, conference, div, team_id):
         if not tds:
             continue
         values = [td.inner_text().strip() for td in tds]
-        row_dict = dict(zip(headers, values))
+        row_dict = dict(zip(headers, values, strict=False))
         a = tr.query_selector("a[href*='/players/']")
         ncaa_id, player_url = None, None
         if a:

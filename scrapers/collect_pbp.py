@@ -7,7 +7,8 @@ from pathlib import Path
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
-BASE = "https://stats.ncaa.org"
+from .constants import BASE
+
 
 def year_to_season(year: int) -> str:
     return f"{year-1}-{str(year)[-2:]}"
@@ -108,25 +109,34 @@ def scrape_pbp(indir, outdir, year, divisions, batch_size=50, pause_between_game
                 continue
 
             existing, done_ids = load_existing(outdir, div, year)
+
+            sched = sched[sched["contest_id"].notna()]
+            to_scrape = sched[~sched["contest_id"].isin(done_ids)]
+
+            skipped = len(sched) - len(to_scrape)
+            if skipped > 0:
+                print(f"d{div} {year}: skipping {skipped} already-scraped games")
+
+            if to_scrape.empty:
+                print(f"d{div} {year}: all {len(sched)} games already scraped")
+                continue
+
             rows = []
-            total_games = len(sched)
-            print(f"\n=== d{div} {year} pbp — {total_games} games ===")
+            total_games = len(to_scrape)
+            print(f"\n=== d{div} {year} pbp — {total_games} games to scrape ===")
 
             for start in range(0, total_games, batch_size):
                 end = min(start + batch_size, total_games)
-                batch = sched.iloc[start:end]
+                batch = to_scrape.iloc[start:end]
 
                 for _, r in batch.iterrows():
                     gid = r["contest_id"]
-                    if pd.isna(gid) or gid in done_ids:
-                        print(f"skip game {gid}")
-                        continue
                     df = scrape_game_pbp(page, gid, div, year)
                     if not df.empty:
                         rows.append(df)
-                        print(f"success game {gid} ({len(df)} rows)")
+                        print(f"[{start + len(rows)}/{total_games}] game {gid}: {len(df)} rows")
                     else:
-                        print(f"no data game {gid}")
+                        print(f"[{start + len(rows)}/{total_games}] game {gid}: no data")
                     time.sleep(pause_between_games)
 
                 print(f"batch {start+1}-{end} done")
@@ -137,7 +147,7 @@ def scrape_pbp(indir, outdir, year, divisions, batch_size=50, pause_between_game
                 out = pd.concat([existing, new_df], ignore_index=True) if not existing.empty else new_df
                 fpath = outdir / f"d{div}_pbp_{year}.csv"
                 out.to_csv(fpath, index=False)
-                print(f"saved {fpath} ({len(out)} rows)")
+                print(f"saved {fpath} ({len(out)} total rows, {len(new_df)} new)")
 
         browser.close()
 

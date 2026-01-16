@@ -12,6 +12,8 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from .constants import BASE
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -69,9 +71,8 @@ class ProgressManager:
                     with file.open('r') as f:
                         data = json.load(f)
                         self.all_player_data = data.get('player_data', [])
-                        # Rebuild the scraped_urls set from player_data
                         self.scraped_urls = {
-                            f"https://stats.ncaa.org/players/{item['ncaa_id']}"
+                            f"{BASE}/players/{item['ncaa_id']}"
                             for item in self.all_player_data
                         }
                         logging.info(
@@ -82,38 +83,25 @@ class ProgressManager:
                 continue
 
     def save_progress(self, final=False):
-        """
-        Save current progress to checkpoint file.
-
-        Args:
-            final (bool): Whether this is the final save (vs a periodic checkpoint)
-        """
         try:
-            # If this is a final save and backup file exists, remove it first
             if final and self.backup_file.exists():
-                self.backup_file.unlink()  # Delete existing backup file
+                self.backup_file.unlink()
 
-            # If this is a final save and checkpoint file exists, create backup
             if final and self.checkpoint_file.exists():
                 import shutil
                 shutil.copy2(str(self.checkpoint_file), str(self.backup_file))
 
-            # Create parent directory if it doesn't exist
             self.temp_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Save to temporary file first
             with self.temp_file.open('w') as f:
                 json.dump({
                     'player_data': self.all_player_data
                 }, f)
 
-            # If temporary file was created successfully, move it to final location
             if self.temp_file.exists():
-                # Remove existing checkpoint file if it exists to avoid conflicts
                 if self.checkpoint_file.exists():
                     self.checkpoint_file.unlink()
 
-                # Rename temp file to checkpoint file
                 import shutil
                 shutil.move(str(self.temp_file), str(self.checkpoint_file))
 
@@ -123,7 +111,6 @@ class ProgressManager:
         except Exception as e:
             logging.error(f"Error saving progress: {e}")
             import traceback
-            # More detailed error information
             logging.error(traceback.format_exc())
 
 
@@ -144,14 +131,10 @@ def get_player_ids_from_career_table(html_content):
 def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
     progress = ProgressManager()
     interrupt_handler = GracefulInterruptHandler(timeout_minutes)
-
-    # Initialize to_scrape set
     to_scrape = set(urls)
 
-    # Track processed NCAA IDs
     processed_ncaa_ids = {item['ncaa_id'] for item in progress.all_player_data}
 
-    # Remove already scraped URLs from to_scrape
     to_scrape = to_scrape - progress.scraped_urls
 
     session = requests.Session()
@@ -184,39 +167,31 @@ def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
                             progress.save_progress()
                             return pd.DataFrame(progress.all_player_data)
 
-                        # Get all player IDs from the career table
                         player_ids = get_player_ids_from_career_table(
                             response.content)
 
-                        # Create a unique ID using the minimum ID value
                         if player_ids:
                             min_id = min(player_ids)
                             unique_id = f'd3d-{min_id}'
 
-                            # Process each ID found on the page
                             for ncaa_id in player_ids:
                                 if ncaa_id not in processed_ncaa_ids:
-                                    # Add to player data
                                     progress.all_player_data.append({
                                         'ncaa_id': ncaa_id,
                                         'unique_id': unique_id
                                     })
                                     processed_ncaa_ids.add(ncaa_id)
 
-                                    # Add to scraped URLs to avoid processing again
                                     progress.scraped_urls.add(
-                                        f"https://stats.ncaa.org/players/{ncaa_id}")
+                                        f"{BASE}/players/{ncaa_id}")
 
-                                    # Remove from to_scrape if it exists there
-                                    url_to_remove = f"https://stats.ncaa.org/players/{ncaa_id}"
+                                    url_to_remove = f"{BASE}/players/{ncaa_id}"
                                     if url_to_remove in to_scrape:
                                         to_scrape.remove(url_to_remove)
 
-                        # Mark current URL as scraped
                         progress.scraped_urls.add(url)
                         pbar.update(1)
 
-                        # Save progress periodically
                         if len(progress.scraped_urls) % 10 == 0:
                             progress.save_progress()
 
@@ -263,10 +238,8 @@ def main(data_dir: str) -> None:
     progress_file = data_dir.parent / 'scraper_progress.json'
 
     try:
-        # Load roster files
         df = combine_roster_files(output_dir)
 
-        # Load already scraped IDs
         scraped_ids = set()
         ncaa_to_unique_id = {}
         if progress_file.exists():
@@ -275,14 +248,13 @@ def main(data_dir: str) -> None:
                     scraper_progress = json.load(file)['player_data']
                     scraped_df = pd.DataFrame(data=scraper_progress)
                     ncaa_to_unique_id = dict(
-                        zip(scraped_df['ncaa_id'], scraped_df['unique_id']))
+                        zip(scraped_df['ncaa_id'], scraped_df['unique_id'], strict=False))
                     scraped_ids = set(ncaa_to_unique_id.keys())
                     logging.info(
                         f"Loaded {len(scraped_ids)} already scraped IDs from progress file")
             except Exception as e:
                 logging.error(f"Error loading progress file: {e}")
 
-        # Find player IDs that need scraping (those without 'd3d-' prefix)
         need_to_scrape = []
         for pid in df[~df['player_id'].str.contains('d3d-', na=False)]['player_id'].unique():
             if pid and pid not in scraped_ids:
@@ -291,11 +263,9 @@ def main(data_dir: str) -> None:
         logging.info(
             f"Found {len(need_to_scrape)} player IDs that need scraping")
 
-        # Generate URLs to scrape
         urls = [
-            f'https://stats.ncaa.org/players/{player_id}' for player_id in need_to_scrape]
+            f'{BASE}/players/{player_id}' for player_id in need_to_scrape]
 
-        # Process the players
         result_df = process_players(urls)
         logging.info(
             f"Finished processing with {len(result_df)} player records")

@@ -11,11 +11,12 @@ BASE = "https://stats.ncaa.org"
 
 
 def load_existing(outdir, div, year, kind):
-    fpath = Path(outdir) / f"d{div}_lineups_{kind}_{year}.csv"
+    fpath = Path(outdir) / f"d{div}_{kind}_lineups_{year}.csv"
     if fpath.exists():
         df = pd.read_csv(fpath, dtype={"contest_id": "Int64", "ncaa_id": "Int64", "team_id": "Int64"})
         if "contest_id" in df.columns:
-            return df, set(df["contest_id"].dropna().unique())
+            done = set(pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int).unique())
+            return df, done
     return pd.DataFrame(), set()
 
 
@@ -29,7 +30,6 @@ def get_schedules(indir, div, year):
 
 
 def _parse_team_header_text(card_header_el):
-    # header contains: <a href="/teams/597018">...Rose-Hulman</a> Hitting
     a = card_header_el.query_selector("a[href*='/teams/']")
     team_id = None
     team_name = None
@@ -44,8 +44,6 @@ def _parse_team_header_text(card_header_el):
 
 
 def _is_indented_sub(td_html: str) -> bool:
-    # NCAA uses literal &nbsp; in markup; when we read inner_html we will still see it.
-    # Some pages may render unicode NBSP too, so catch both.
     if td_html is None:
         return False
     return ("&nbsp;" in td_html) or ("\u00a0" in td_html)
@@ -65,17 +63,37 @@ def _extract_player_link_data(name_td_el):
     return ncaa_id, name_text
 
 
+def _atomic_write_csv(df: pd.DataFrame, fpath: Path):
+    tmp = fpath.with_suffix(fpath.suffix + ".tmp")
+    df.to_csv(tmp, index=False)
+    tmp.replace(fpath)
+
+
+def _dedupe_hit(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    key = [c for c in ["division", "year", "contest_id", "team_id", "ncaa_id", "is_sub", "bat_order", "pos"] if c in df.columns]
+    if not key:
+        return df
+    return df.drop_duplicates(subset=key, keep="last")
+
+
+def _dedupe_pit(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    key = [c for c in ["division", "year", "contest_id", "team_id", "ncaa_id", "is_sub", "pitch_order"] if c in df.columns]
+    if not key:
+        return df
+    return df.drop_duplicates(subset=key, keep="last")
+
+
 def scrape_game_lineups(page, contest_id, div, year, max_retries=3):
-    """
-    Returns (hitting_df, pitching_df) for a contest_id.
-    Each df has one row per player appearance in that game-table (starters + subs + pitchers).
-    """
     url = f"{BASE}/contests/{contest_id}/individual_stats"
 
     for retry in range(1, max_retries + 1):
         try:
-            page.goto(url, timeout=10000)
-            page.wait_for_selector("div.card", timeout=10000)
+            page.goto(url, timeout=20000, wait_until="domcontentloaded")
+            page.wait_for_selector("div.card", timeout=20000)
 
             cards = page.query_selector_all("div.card")
             if not cards:
@@ -94,21 +112,17 @@ def scrape_game_lineups(page, contest_id, div, year, max_retries=3):
                 team_id, team_name, header_text = _parse_team_header_text(header)
                 header_lower = header_text.lower()
 
-                is_hitting = "hitting" in header_lower
+                is_hitting = "hitting" in header_lower or "batting" in header_lower
                 is_pitching = "pitching" in header_lower
                 if not (is_hitting or is_pitching):
                     continue
 
-                # Get table header labels so we can map columns robustly
                 ths = tbl.query_selector_all("thead tr th")
                 col_names = [(th.inner_text() or "").strip() for th in ths]
 
-                # Find indices we care about
-                # Hitting: ["#", "Name", "P", ...]
-                # Pitching: usually ["#", "Name", "IP", "H", "R", ...] (varies)
                 idx_num = None
                 idx_name = None
-                idx_pos = None  # hitting position column ("P") if present
+                idx_pos = None
 
                 for i, c in enumerate(col_names):
                     c_norm = c.replace("\n", " ").strip()
@@ -116,10 +130,9 @@ def scrape_game_lineups(page, contest_id, div, year, max_retries=3):
                         idx_num = i
                     if c_norm.lower() == "name":
                         idx_name = i
-                    if is_hitting and c_norm == "P":
+                    if is_hitting and c_norm in ("P", "Pos"):
                         idx_pos = i
 
-                # Iterate player rows in tbody; skip totals rows without player links
                 trs = tbl.query_selector_all("tbody tr")
                 for tr in trs:
                     tds = tr.query_selector_all("td")
@@ -132,19 +145,18 @@ def scrape_game_lineups(page, contest_id, div, year, max_retries=3):
                     name_td_html = name_td.inner_html() or ""
                     link_data = _extract_player_link_data(name_td)
                     if not link_data:
-                        continue  # totals/team rows, inning period rows, etc.
+                        continue
 
                     ncaa_id, player_name = link_data
                     is_sub = _is_indented_sub(name_td_html)
 
-                    bat_order = None
+                    order_num = None
                     if idx_num is not None and idx_num < len(tds):
                         raw_num = (tds[idx_num].inner_text() or "").strip()
                         raw_num = raw_num.replace("\u00a0", "").strip()
                         if raw_num != "":
-                            # some rows may have non-numeric, but usually numeric
                             mnum = re.search(r"\d+", raw_num)
-                            bat_order = int(mnum.group(0)) if mnum else None
+                            order_num = int(mnum.group(0)) if mnum else None
 
                     pos = None
                     if is_hitting and idx_pos is not None and idx_pos < len(tds):
@@ -163,28 +175,13 @@ def scrape_game_lineups(page, contest_id, div, year, max_retries=3):
                     }
 
                     if is_hitting:
-                        hit_rows.append(
-                            {
-                                **base,
-                                "bat_order": bat_order,
-                                "pos": pos,
-                            }
-                        )
-                    elif is_pitching:
-                        # For pitching we still keep bat_order as None (not meaningful)
-                        # and store a "role_pos" as whatever the table shows in the 3rd column if it exists.
-                        # But most NCAA pitching tables don't have a position column like "P", so keep it simple.
-                        pit_rows.append(
-                            {
-                                **base,
-                                "pitch_order": bat_order,  # this is often jersey slot or appearance order; still useful
-                            }
-                        )
+                        hit_rows.append({**base, "bat_order": order_num, "pos": pos})
+                    else:
+                        pit_rows.append({**base, "pitch_order": order_num})
 
             hit_df = pd.DataFrame(hit_rows)
             pit_df = pd.DataFrame(pit_rows)
 
-            # Normalize types
             for df in (hit_df, pit_df):
                 if df.empty:
                     continue
@@ -225,60 +222,58 @@ def scrape_lineups(
                 print(f"no schedule for d{div} {year}")
                 continue
 
-            existing_hit, done_hit = load_existing(outdir, div, year, kind="hitting")
+            # FIX: these must match filenames you write below
+            existing_hit, done_hit = load_existing(outdir, div, year, kind="batting")
             existing_pit, done_pit = load_existing(outdir, div, year, kind="pitching")
-
             done_ids = done_hit.intersection(done_pit) if (done_hit and done_pit) else (done_hit | done_pit)
+
+            total_games = len(sched)
+            sched = sched[~sched["contest_id"].isin(list(done_ids))]
+            games_to_scrape = len(sched)
+
+            print(f"\n=== d{div} {year} lineups — {total_games} games - already scraped {len(done_ids)} games - to scrape {games_to_scrape} ===")
+            if games_to_scrape == 0:
+                continue
 
             rows_hit = []
             rows_pit = []
 
-            total_games = len(sched)
-            print(f"\n=== d{div} {year} lineups — {total_games} games ===")
-
-            for start in range(0, total_games, batch_size):
-                end = min(start + batch_size, total_games)
+            for start in range(0, games_to_scrape, batch_size):
+                end = min(start + batch_size, games_to_scrape)
                 batch = sched.iloc[start:end]
 
                 for _, r in batch.iterrows():
                     gid = r["contest_id"]
-                    if pd.isna(gid) or int(gid) in done_ids:
-                        print(f"skip game {gid}")
+                    if pd.isna(gid):
                         continue
 
                     hit_df, pit_df = scrape_game_lineups(page, int(gid), div, year)
+
                     if not hit_df.empty:
                         rows_hit.append(hit_df)
                     if not pit_df.empty:
                         rows_pit.append(pit_df)
 
-                    print(f"game {gid}: hit={len(hit_df)} pit={len(pit_df)}")
+                    print(f"game {int(gid)}: hit={len(hit_df)} pit={len(pit_df)}")
                     time.sleep(pause_between_games)
 
                 print(f"batch {start+1}-{end} done")
                 time.sleep(pause_between_batches)
 
-            # Save outputs
             if rows_hit:
                 new_hit = pd.concat(rows_hit, ignore_index=True)
-                out_hit = (
-                    pd.concat([existing_hit, new_hit], ignore_index=True)
-                    if not existing_hit.empty
-                    else new_hit
-                )
-                fpath = outdir / f"d{div}_lineups_hitting_{year}.csv"
-                out_hit.to_csv(fpath, index=False)
+                out_hit = pd.concat([existing_hit, new_hit], ignore_index=True) if not existing_hit.empty else new_hit
+                out_hit = _dedupe_hit(out_hit)
+                fpath = outdir / f"d{div}_batting_lineups_{year}.csv"
+                _atomic_write_csv(out_hit, fpath)
                 print(f"saved {fpath} ({len(out_hit)} rows)")
 
             if rows_pit:
                 new_pit = pd.concat(rows_pit, ignore_index=True)
-                out_pit = (
-                    pd.concat([existing_pit, new_pit], ignore_index=True)
-                    if not existing_pit.empty
-                    else new_pit
-                )
-                fpath = outdir / f"d{div}_lineups_pitching_{year}.csv"
-                out_pit.to_csv(fpath, index=False)
+                out_pit = pd.concat([existing_pit, new_pit], ignore_index=True) if not existing_pit.empty else new_pit
+                out_pit = _dedupe_pit(out_pit)
+                fpath = outdir / f"d{div}_pitching_lineups_{year}.csv"
+                _atomic_write_csv(out_pit, fpath)
                 print(f"saved {fpath} ({len(out_pit)} rows)")
 
         browser.close()
@@ -288,8 +283,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--indir", default="../data/schedules")
-    parser.add_argument("--outdir", default="../data/lineups")
+    parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
+    parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/lineups")
     parser.add_argument("--batch_size", type=int, default=50)
     parser.add_argument("--headless", action="store_true")
     args = parser.parse_args()

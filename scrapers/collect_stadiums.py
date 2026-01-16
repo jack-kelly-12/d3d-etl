@@ -6,7 +6,8 @@ from pathlib import Path
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
-BASE = "https://stats.ncaa.org"
+from .constants import BASE
+
 
 def get_most_recent_team_ids(team_ids_file):
     teams = pd.read_csv(team_ids_file)
@@ -106,7 +107,7 @@ def scrape_stadiums(team_ids_file, outdir, batch_size=25, max_retries=2, pause_b
 
                         print(f"    Found {len(dts)} dt elements and {len(dds)} dd elements")
 
-                        for dt, dd in zip(dts, dds):
+                        for dt, dd in zip(dts, dds, strict=False):
                             label = dt.inner_text().strip().rstrip(':')
                             value = dd.inner_text().strip()
 

@@ -22,7 +22,6 @@ def main():
 
     for year in YEARS:
         for div in DIVISIONS:
-            sched_file = Path(f"../data/schedules/d{div}_schedules_{year}.csv")
             pbp_file = Path(f"../data/pbp/d{div}_pbp_{year}.csv")
 
             # run([sys.executable, "collect_schedules.py",
