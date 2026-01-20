@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import sync_playwright
+
+from .scraper_utils import ScraperConfig, ScraperSession
 
 BASE = "https://masseyratings.com"
 
@@ -22,6 +23,7 @@ def scrape_massey_rankings(
     between_downloads_s: float = 4.0,
     max_retries: int = 3,
     timeout_ms: int = 45000,
+    base_delay: float = 3.0,
 ):
     data_dir = Path(data_dir)
     outdir = data_dir / "rankings"
@@ -30,11 +32,16 @@ def scrape_massey_rankings(
     years = sorted({int(y) for y in years})
     divisions = sorted({int(d) for d in divisions})
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(accept_downloads=True)
-        page = context.new_page()
+    config = ScraperConfig(
+        base_delay=base_delay,
+        headless=headless,
+        block_resources=False,
+        max_retries=max_retries,
+        timeout_ms=timeout_ms,
+        accept_downloads=True,
+    )
 
+    with ScraperSession(config) as session:
         for year in years:
             for div in divisions:
                 url = build_url(year, div)
@@ -51,19 +58,28 @@ def scrape_massey_rankings(
 
                 for attempt in range(1, max_retries + 1):
                     try:
-                        page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                        html, status = session.fetch(
+                            url,
+                            wait_selector="select#pulldownlinks",
+                            wait_timeout=timeout_ms
+                        )
 
-                        page.wait_for_selector("select#pulldownlinks", timeout=timeout_ms)
+                        if not html or status >= 400:
+                            print(f"attempt {attempt}/{max_retries} failed: HTTP {status}")
+                            time.sleep(min(10.0, 2.0 ** (attempt - 1) + 1.0))
+                            continue
+
                         time.sleep(page_wait_s)
 
-                        with page.expect_download(timeout=timeout_ms) as dl_info:
-                            page.select_option("select#pulldownlinks", value="exportCSV")
+                        with session.page.expect_download(timeout=timeout_ms) as dl_info:
+                            session.page.select_option("select#pulldownlinks", value="exportCSV")
 
                         download = dl_info.value
                         tmp_path = Path(download.path())
 
                         df = pd.read_csv(tmp_path)
-                        df = normalize_massey_rankings(df)
+                        df = normalize_massey_rankings(df, division=div, year=year)
+                        
                         df.to_csv(outpath, index=False)
 
                         try:
@@ -84,9 +100,6 @@ def scrape_massey_rankings(
                 if not success:
                     print(f"FAILED year={year} div={div} url={url}")
 
-        context.close()
-        browser.close()
-
 
 def _parse_years(vals: list[str]) -> list[int]:
     out: list[int] = []
@@ -103,13 +116,14 @@ def _parse_years(vals: list[str]) -> list[int]:
             out.append(int(v))
     return out
 
-def normalize_massey_rankings(df: pd.DataFrame) -> pd.DataFrame:
+
+def normalize_massey_rankings(df: pd.DataFrame, division: int, year: int) -> pd.DataFrame:
     df = df.copy()
 
     cols = list(df.columns)
 
     base_cols = [
-        ("team", cols[0]),
+        ("massey_team", cols[0]),
         ("conference", cols[1]),
         ("record", cols[2]),
         ("win_pct", cols[3]),
@@ -122,10 +136,10 @@ def normalize_massey_rankings(df: pd.DataFrame) -> pd.DataFrame:
 
     for i, metric in enumerate(metric_names):
         rank_col = cols[start + i * 2]
-        val_col  = cols[start + i * 2 + 1]
+        val_col = cols[start + i * 2 + 1]
 
         new_cols[rank_col] = f"{metric}_rank"
-        new_cols[val_col]  = f"{metric}_val"
+        new_cols[val_col] = f"{metric}_val"
 
     rename_map = {orig: new for new, orig in base_cols}
     rename_map.update(new_cols)
@@ -140,25 +154,32 @@ def normalize_massey_rankings(df: pd.DataFrame) -> pd.DataFrame:
           .str.replace(" ", "_", regex=False)
     )
 
+    df = df.loc[:, ~df.columns.str.startswith("unnamed")]
+
     for c in df.columns:
         if c.endswith("_rank"):
-            df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int64")
-        if c.endswith("_val") or c == "win_pct":
+            numeric = pd.to_numeric(df[c], errors="coerce")
+            df[c] = numeric.round().astype("Int64")
+        elif c.endswith("_val") or c == "win_pct":
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["division"] = division
+    df["year"] = year
 
     return df
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="../data")
-    parser.add_argument("--years", nargs="+", default=["2021-2025"])
+    parser.add_argument("--data_dir", default="/Users/jackkelly/Desktop/d3d-etl/data")
+    parser.add_argument("--years", nargs="+", default=["2021-2026"])
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--page_wait_s", type=float, default=2.0)
     parser.add_argument("--between_downloads_s", type=float, default=4.0)
     parser.add_argument("--max_retries", type=int, default=3)
     parser.add_argument("--timeout_ms", type=int, default=45000)
+    parser.add_argument("--base_delay", type=float, default=3.0)
     args = parser.parse_args()
 
     years = _parse_years(args.years)
@@ -172,4 +193,5 @@ if __name__ == "__main__":
         between_downloads_s=args.between_downloads_s,
         max_retries=args.max_retries,
         timeout_ms=args.timeout_ms,
+        base_delay=args.base_delay,
     )

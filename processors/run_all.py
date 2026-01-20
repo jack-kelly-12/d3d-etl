@@ -25,7 +25,7 @@ def main():
 
     for year in YEARS:
 
-        run([sys.executable, "parse_pbp.py",
+        run([sys.executable, "pbp_parser/main.py",
              "--data_dir", data_dir,
              "--year", str(year),
              "--divisions"] + [str(d) for d in args.divisions])
@@ -59,6 +59,11 @@ def main():
              "--data_dir", data_dir,
              "--year", str(year),
              "--divisions"] + [str(d) for d in args.divisions])
+
+    run([sys.executable, "aggregate_player_info.py",
+         "--data_dir", data_dir,
+         "--divisions"] + [str(d) for d in args.divisions] +
+        ["--years"] + [str(y) for y in YEARS])
 
 
 if __name__ == "__main__":

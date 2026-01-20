@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 
 
-def get_expected_runs_matrix_2(base_cd, outs, runs_rest_of_inn):
+def get_expected_runs_matrix_2(bases_before, outs, runs_rest_of_inn):
     er = pd.DataFrame({
-        'base_cd': base_cd,
+        'bases_before': bases_before,
         'outs': outs,
         'runs_rest_of_inn': runs_rest_of_inn
     }).dropna()
 
-    er = (er.groupby(['base_cd','outs'])
+    er = (er.groupby(['bases_before', 'outs'])
           .agg(
               erv=('runs_rest_of_inn', 'mean'),
               prob_score=('runs_rest_of_inn', lambda x: (x > 0).mean()),
@@ -25,8 +25,12 @@ def get_expected_runs_matrix_2(base_cd, outs, runs_rest_of_inn):
     er_matrix = np.zeros((8, 3))
     prob_matrix = np.zeros((8, 3))
 
+    base_state_map = {'NNN': 0, 'YNN': 1, 'NYN': 2, 'YYN': 3,
+                      'NNY': 4, 'YNY': 5, 'NYY': 6, 'YYY': 7}
+
     for _, row in er.iterrows():
-        base_idx = int(row['base_cd'])
+        base_state = row['bases_before']
+        base_idx = base_state_map.get(base_state, -1)
         out_idx = int(row['outs'])
         if 0 <= base_idx < 8 and 0 <= out_idx < 3:
             er_matrix[base_idx, out_idx] = row['erv']
@@ -34,15 +38,15 @@ def get_expected_runs_matrix_2(base_cd, outs, runs_rest_of_inn):
 
     er_matrix = pd.DataFrame(
         er_matrix,
-        index=['_ _ _', '1B _ _', '_ 2B _', '1B 2B _',
-               '_ _ 3B', '1B _ 3B', '_ 2B 3B', '1B 2B 3B'],
+        index=['NNN', 'YNN', 'NYN', 'YYN',
+               'NNY', 'YNY', 'NYY', 'YYY'],
         columns=['0', '1', '2']
     )
 
     prob_matrix = pd.DataFrame(
         prob_matrix,
-        index=['_ _ _', '1B _ _', '_ 2B _', '1B 2B _',
-               '_ _ 3B', '1B _ 3B', '_ 2B 3B', '1B 2B 3B'],
+        index=['NNN', 'YNN', 'NYN', 'YYN',
+               'NNY', 'YNY', 'NYY', 'YYY'],
         columns=['0', '1', '2']
     )
 
@@ -65,18 +69,18 @@ def main(data_dir, year, divisions=None):
                 f'd{division}_parsed_pbp_{year}.csv'
 
             if not pbp_file.exists():
-                print(f"PBP file not found: {pbp_file}")
+                print(f"Play by play file not found: {pbp_file}")
                 continue
 
             pbp_df = pd.read_csv(pbp_file)
             print(f"Loaded {len(pbp_df)} rows for D{division} {year}")
 
-            base_cd = pbp_df['base_cd_before']
+            bases_before = pbp_df['bases_before']
             outs = pbp_df['outs_before']
             runs_rest_of_inn = pbp_df['runs_roi']
 
             matrix, prob_matrix = get_expected_runs_matrix_2(
-                base_cd, outs, runs_rest_of_inn)
+                bases_before, outs, runs_rest_of_inn)
             all_matrices[f"D{division}_{year}"] = matrix
             all_prob_matrices[f"D{division}_{year}"] = prob_matrix
             print(f"Processed D{division} {year}")

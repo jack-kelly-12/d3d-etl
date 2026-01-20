@@ -420,7 +420,7 @@ class BaseballAnalytics:
             'description': 'count',
             'is_pull': lambda x: (x).sum(),
             'is_oppo': lambda x: (x).sum(),
-            'is_middle': lambda x: (x == True).sum(),
+            'is_middle': lambda x: (x).sum(),
             'is_ground': lambda x: (x).sum(),
             'is_fly': lambda x: (x).sum(),
             'is_lined': lambda x: (x).sum(),

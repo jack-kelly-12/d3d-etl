@@ -1,11 +1,11 @@
 import argparse
 import html
 import re
-import time
 from pathlib import Path
 
 import pandas as pd
-from playwright.sync_api import sync_playwright
+
+from .scraper_utils import ScraperConfig, ScraperSession
 
 BASE = "https://stats.ncaa.org"
 
@@ -87,116 +87,111 @@ def _dedupe_pit(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop_duplicates(subset=key, keep="last")
 
 
-def scrape_game_lineups(page, contest_id, div, year, max_retries=3):
+def scrape_game_lineups(session: ScraperSession, contest_id, div, year):
     url = f"{BASE}/contests/{contest_id}/individual_stats"
 
-    for retry in range(1, max_retries + 1):
-        try:
-            page.goto(url, timeout=20000, wait_until="domcontentloaded")
-            page.wait_for_selector("div.card", timeout=20000)
+    html_content, status = session.fetch(url, wait_selector="div.card", wait_timeout=20000)
 
-            cards = page.query_selector_all("div.card")
-            if not cards:
-                return pd.DataFrame(), pd.DataFrame()
+    if not html_content or status >= 400:
+        print(f"  failed lineup game {contest_id}: HTTP {status}")
+        return pd.DataFrame(), pd.DataFrame()
 
-            hit_rows = []
-            pit_rows = []
+    page = session.page
+    cards = page.query_selector_all("div.card")
+    if not cards:
+        return pd.DataFrame(), pd.DataFrame()
 
-            for card in cards:
-                header = card.query_selector("div.card-header")
-                body = card.query_selector("div.card-body")
-                tbl = body.query_selector("table") if body else None
-                if not header or not tbl:
-                    continue
+    hit_rows = []
+    pit_rows = []
 
-                team_id, team_name, header_text = _parse_team_header_text(header)
-                header_lower = header_text.lower()
+    for card in cards:
+        header = card.query_selector("div.card-header")
+        body = card.query_selector("div.card-body")
+        tbl = body.query_selector("table") if body else None
+        if not header or not tbl:
+            continue
 
-                is_hitting = "hitting" in header_lower or "batting" in header_lower
-                is_pitching = "pitching" in header_lower
-                if not (is_hitting or is_pitching):
-                    continue
+        team_id, team_name, header_text = _parse_team_header_text(header)
+        header_lower = header_text.lower()
 
-                ths = tbl.query_selector_all("thead tr th")
-                col_names = [(th.inner_text() or "").strip() for th in ths]
+        is_hitting = "hitting" in header_lower or "batting" in header_lower
+        is_pitching = "pitching" in header_lower
+        if not (is_hitting or is_pitching):
+            continue
 
-                idx_num = None
-                idx_name = None
-                idx_pos = None
+        ths = tbl.query_selector_all("thead tr th")
+        col_names = [(th.inner_text() or "").strip() for th in ths]
 
-                for i, c in enumerate(col_names):
-                    c_norm = c.replace("\n", " ").strip()
-                    if c_norm == "#":
-                        idx_num = i
-                    if c_norm.lower() == "name":
-                        idx_name = i
-                    if is_hitting and c_norm in ("P", "Pos"):
-                        idx_pos = i
+        idx_num = None
+        idx_name = None
+        idx_pos = None
 
-                trs = tbl.query_selector_all("tbody tr")
-                for tr in trs:
-                    tds = tr.query_selector_all("td")
-                    if not tds:
-                        continue
-                    if idx_name is None or idx_name >= len(tds):
-                        continue
+        for i, c in enumerate(col_names):
+            c_norm = c.replace("\n", " ").strip()
+            if c_norm == "#":
+                idx_num = i
+            if c_norm.lower() == "name":
+                idx_name = i
+            if is_hitting and c_norm in ("P", "Pos"):
+                idx_pos = i
 
-                    name_td = tds[idx_name]
-                    name_td_html = name_td.inner_html() or ""
-                    link_data = _extract_player_link_data(name_td)
-                    if not link_data:
-                        continue
+        trs = tbl.query_selector_all("tbody tr")
+        for tr in trs:
+            tds = tr.query_selector_all("td")
+            if not tds:
+                continue
+            if idx_name is None or idx_name >= len(tds):
+                continue
 
-                    ncaa_id, player_name = link_data
-                    is_sub = _is_indented_sub(name_td_html)
+            name_td = tds[idx_name]
+            name_td_html = name_td.inner_html() or ""
+            link_data = _extract_player_link_data(name_td)
+            if not link_data:
+                continue
 
-                    order_num = None
-                    if idx_num is not None and idx_num < len(tds):
-                        raw_num = (tds[idx_num].inner_text() or "").strip()
-                        raw_num = raw_num.replace("\u00a0", "").strip()
-                        if raw_num != "":
-                            mnum = re.search(r"\d+", raw_num)
-                            order_num = int(mnum.group(0)) if mnum else None
+            ncaa_id, player_name = link_data
+            is_sub = _is_indented_sub(name_td_html)
 
-                    pos = None
-                    if is_hitting and idx_pos is not None and idx_pos < len(tds):
-                        pos = (tds[idx_pos].inner_text() or "").strip()
-                        pos = pos.replace("\u00a0", "").strip() or None
+            order_num = None
+            if idx_num is not None and idx_num < len(tds):
+                raw_num = (tds[idx_num].inner_text() or "").strip()
+                raw_num = raw_num.replace("\u00a0", "").strip()
+                if raw_num != "":
+                    mnum = re.search(r"\d+", raw_num)
+                    order_num = int(mnum.group(0)) if mnum else None
 
-                    base = {
-                        "division": div,
-                        "year": year,
-                        "contest_id": int(contest_id),
-                        "team_id": team_id,
-                        "team_name": team_name,
-                        "ncaa_id": ncaa_id,
-                        "name": player_name,
-                        "is_sub": bool(is_sub),
-                    }
+            pos = None
+            if is_hitting and idx_pos is not None and idx_pos < len(tds):
+                pos = (tds[idx_pos].inner_text() or "").strip()
+                pos = pos.replace("\u00a0", "").strip() or None
 
-                    if is_hitting:
-                        hit_rows.append({**base, "bat_order": order_num, "pos": pos})
-                    else:
-                        pit_rows.append({**base, "pitch_order": order_num})
+            base = {
+                "division": div,
+                "year": year,
+                "contest_id": int(contest_id),
+                "team_id": team_id,
+                "team_name": team_name,
+                "ncaa_id": ncaa_id,
+                "name": player_name,
+                "is_sub": bool(is_sub),
+            }
 
-            hit_df = pd.DataFrame(hit_rows)
-            pit_df = pd.DataFrame(pit_rows)
+            if is_hitting:
+                hit_rows.append({**base, "bat_order": order_num, "pos": pos})
+            else:
+                pit_rows.append({**base, "pitch_order": order_num})
 
-            for df in (hit_df, pit_df):
-                if df.empty:
-                    continue
-                for c in ("team_id", "ncaa_id", "contest_id"):
-                    if c in df.columns:
-                        df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int64")
+    hit_df = pd.DataFrame(hit_rows)
+    pit_df = pd.DataFrame(pit_rows)
 
-            return hit_df, pit_df
+    for df in (hit_df, pit_df):
+        if df.empty:
+            continue
+        for c in ("team_id", "ncaa_id", "contest_id"):
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int64")
 
-        except Exception as e:
-            if retry == max_retries:
-                print(f"failed lineup game {contest_id}: {e}")
-            time.sleep(2 ** (retry - 1))
-
-    return pd.DataFrame(), pd.DataFrame()
+    return hit_df, pit_df
 
 
 def scrape_lineups(
@@ -205,24 +200,27 @@ def scrape_lineups(
     year,
     divisions,
     batch_size=50,
-    pause_between_games=0.5,
-    pause_between_batches=5,
-    headless=False,
+    headless=True,
+    base_delay=2.0,
+    daily_budget=20000,
 ):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        page = browser.new_page()
+    config = ScraperConfig(
+        base_delay=base_delay,
+        headless=headless,
+        block_resources=True,
+        daily_request_budget=daily_budget,
+    )
 
+    with ScraperSession(config) as session:
         for div in divisions:
             sched = get_schedules(indir, div, year)
             if sched.empty:
                 print(f"no schedule for d{div} {year}")
                 continue
 
-            # FIX: these must match filenames you write below
             existing_hit, done_hit = load_existing(outdir, div, year, kind="batting")
             existing_pit, done_pit = load_existing(outdir, div, year, kind="pitching")
             done_ids = done_hit.intersection(done_pit) if (done_hit and done_pit) else (done_hit | done_pit)
@@ -232,6 +230,8 @@ def scrape_lineups(
             games_to_scrape = len(sched)
 
             print(f"\n=== d{div} {year} lineups — {total_games} games - already scraped {len(done_ids)} games - to scrape {games_to_scrape} ===")
+            print(f"    (budget remaining: {session.requests_remaining} requests)")
+
             if games_to_scrape == 0:
                 continue
 
@@ -239,15 +239,22 @@ def scrape_lineups(
             rows_pit = []
 
             for start in range(0, games_to_scrape, batch_size):
+                if session.requests_remaining <= 0:
+                    print("[budget] daily request budget exhausted, stopping")
+                    break
+
                 end = min(start + batch_size, games_to_scrape)
                 batch = sched.iloc[start:end]
 
                 for _, r in batch.iterrows():
+                    if session.requests_remaining <= 0:
+                        break
+
                     gid = r["contest_id"]
                     if pd.isna(gid):
                         continue
 
-                    hit_df, pit_df = scrape_game_lineups(page, int(gid), div, year)
+                    hit_df, pit_df = scrape_game_lineups(session, int(gid), div, year)
 
                     if not hit_df.empty:
                         rows_hit.append(hit_df)
@@ -255,10 +262,22 @@ def scrape_lineups(
                         rows_pit.append(pit_df)
 
                     print(f"game {int(gid)}: hit={len(hit_df)} pit={len(pit_df)}")
-                    time.sleep(pause_between_games)
 
-                print(f"batch {start+1}-{end} done")
-                time.sleep(pause_between_batches)
+                print(f"batch {start+1}-{end} done (budget: {session.requests_remaining})")
+
+                if rows_hit:
+                    new_hit = pd.concat(rows_hit, ignore_index=True)
+                    out_hit = pd.concat([existing_hit, new_hit], ignore_index=True) if not existing_hit.empty else new_hit
+                    out_hit = _dedupe_hit(out_hit)
+                    fpath = outdir / f"d{div}_batting_lineups_{year}.csv"
+                    _atomic_write_csv(out_hit, fpath)
+
+                if rows_pit:
+                    new_pit = pd.concat(rows_pit, ignore_index=True)
+                    out_pit = pd.concat([existing_pit, new_pit], ignore_index=True) if not existing_pit.empty else new_pit
+                    out_pit = _dedupe_pit(out_pit)
+                    fpath = outdir / f"d{div}_pitching_lineups_{year}.csv"
+                    _atomic_write_csv(out_pit, fpath)
 
             if rows_hit:
                 new_hit = pd.concat(rows_hit, ignore_index=True)
@@ -276,8 +295,6 @@ def scrape_lineups(
                 _atomic_write_csv(out_pit, fpath)
                 print(f"saved {fpath} ({len(out_pit)} rows)")
 
-        browser.close()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -286,7 +303,9 @@ if __name__ == "__main__":
     parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/lineups")
     parser.add_argument("--batch_size", type=int, default=50)
-    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--headless", action="store_true", default=True)
+    parser.add_argument("--base_delay", type=float, default=2.0)
+    parser.add_argument("--daily_budget", type=int, default=20000)
     args = parser.parse_args()
 
     scrape_lineups(
@@ -296,4 +315,6 @@ if __name__ == "__main__":
         divisions=args.divisions,
         batch_size=args.batch_size,
         headless=args.headless,
+        base_delay=args.base_delay,
+        daily_budget=args.daily_budget,
     )

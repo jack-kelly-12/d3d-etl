@@ -8,4 +8,5 @@ data/
 venv/
 .venv/
 */.env
-
+.DS_Store
+*.pyc

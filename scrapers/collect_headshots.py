@@ -9,7 +9,10 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
+from .scraper_utils import BLOCKED_RESOURCE_TYPES, ScraperConfig
+
 OUTDIR = "/Users/jackkelly/Desktop/d3d-etl/data/headshots"
+
 
 async def fetch_school_list():
     with open("/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json") as f:
@@ -32,10 +35,6 @@ def presto_season_slug(season: int) -> str:
 
 
 def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
-    """
-    Returns [(url, hint)], where hint is the URL family we tried.
-    Order matters: try Sidearm first, then Presto.
-    """
     base = ensure_https(base)
     return [
         (f"{base}/sports/baseball/roster/{season}", "sidearm"),
@@ -66,11 +65,6 @@ def _strip_query(url: str | None) -> str | None:
 
 
 def _strip_sidearm_crop(url: str | None) -> str | None:
-    """
-    Sidearm NextGen often uses:
-      https://images.sidearmdev.com/crop?url=<encoded real url>&width=...
-    Return the underlying image URL if present; else strip query params.
-    """
     if not url:
         return None
     if "images.sidearmdev.com/crop" in url and "url=" in url:
@@ -95,7 +89,6 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     rows: list[dict] = []
 
-    # 1) Classic Sidearm player cards
     for p in soup.select(".sidearm-roster-player"):
         name_el = p.select_one(".sidearm-roster-player-name a, .sidearm-roster-player-name")
         number_el = p.select_one(".sidearm-roster-player-jersey-number")
@@ -135,7 +128,6 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
             "img_url": img_url,
         })
 
-    # 2) Classic Sidearm roster table
     if not rows:
         for tr in soup.select("table.sidearm-table tbody tr"):
             name_el = tr.select_one(".sidearm-table-player-name a, .sidearm-table-player-name")
@@ -313,10 +305,9 @@ def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
     return rows
 
 
-async def fetch_html(browser, url: str) -> tuple[str | None, int]:
-    page = await browser.new_page()
+async def fetch_html(page, url: str, config: ScraperConfig) -> tuple[str | None, int]:
     try:
-        resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        resp = await page.goto(url, timeout=config.timeout_ms, wait_until="domcontentloaded")
         status = resp.status if resp else 0
 
         try:
@@ -328,43 +319,66 @@ async def fetch_html(browser, url: str) -> tuple[str | None, int]:
             pass
 
         html = await page.content()
-        await page.close()
         return html, status
     except Exception:
-        await page.close()
         return None, 0
 
 
-async def scrape_team(browser, base: str, team_name: str, season: int) -> list[dict]:
+async def scrape_team(browser, base: str, team_name: str, season: int, config: ScraperConfig) -> list[dict]:
     candidates = build_candidate_urls(base, season)
-    for url, hint in candidates:
-        print(f"🔎 {team_name}: trying {hint} → {url}")
-        html, status = await fetch_html(browser, url)
-        if not html or status >= 400:
-            print(f"  ❌ {team_name}: HTTP {status} or no HTML on {hint}")
-            continue
 
-        cms = detect_cms(html) or hint
-        if cms == "sidearm":
-            rows = parse_sidearm(html, team_name, season, url)
-        elif cms == "presto":
-            rows = parse_presto(html, team_name, season, url)
-        else:
-            rows = parse_sidearm(html, team_name, season, url)
-            if not rows:
+    context = await browser.new_context(
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        viewport={"width": 1920, "height": 1080},
+    )
+    page = await context.new_page()
+
+    if config.block_resources:
+        await page.route("**/*", lambda route: (
+            route.abort() if route.request.resource_type in BLOCKED_RESOURCE_TYPES
+            else route.continue_()
+        ))
+
+    try:
+        for url, hint in candidates:
+            print(f"  {team_name}: trying {hint}")
+            html, status = await fetch_html(page, url, config)
+            if not html or status >= 400:
+                print(f"    {team_name}: HTTP {status} on {hint}")
+                continue
+
+            cms = detect_cms(html) or hint
+            if cms == "sidearm":
+                rows = parse_sidearm(html, team_name, season, url)
+            elif cms == "presto":
                 rows = parse_presto(html, team_name, season, url)
+            else:
+                rows = parse_sidearm(html, team_name, season, url)
+                if not rows:
+                    rows = parse_presto(html, team_name, season, url)
 
-        if rows:
-            print(f"  ✅ {team_name}: {len(rows)} players ({cms})")
-            return rows
-        else:
-            print(f"  ⚠️ {team_name}: no players parsed on {hint}; trying next…")
+            if rows:
+                print(f"    {team_name}: {len(rows)} players ({cms})")
+                return rows
+            else:
+                print(f"    {team_name}: no players parsed on {hint}")
 
-    print(f"  🚫 {team_name}: no working roster URL")
-    return []
+        print(f"    {team_name}: no working roster URL")
+        return []
+    finally:
+        await page.close()
+        await context.close()
 
 
-async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdir=OUTDIR, team_name=None):
+async def main(
+    season=2026,
+    limit=None,
+    batch_size=5,
+    missing_only=False,
+    outdir=OUTDIR,
+    team_name=None,
+    base_delay=3.0,
+):
     schools = await fetch_school_list()
 
     roster_targets = []
@@ -377,7 +391,7 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
     if team_name:
         roster_targets = [(b, t) for (b, t) in roster_targets if t == team_name]
         if not roster_targets:
-            print(f"❌ Team '{team_name}' not found in school list")
+            print(f"Team '{team_name}' not found in school list")
             return pd.DataFrame()
     elif limit:
         roster_targets = roster_targets[:limit]
@@ -392,21 +406,32 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
         existing["year"] = pd.to_numeric(existing["year"], errors="coerce")
         done = existing.loc[existing["year"] == int(season), "team"].dropna().unique().tolist()
         skip = set(done)
-        print(f"⏭️  Skipping {len(skip)} teams already saved for {season}")
+        print(f"Skipping {len(skip)} teams already saved for {season}")
 
     filtered = [(b, t) for (b, t) in roster_targets if t not in skip]
-    print(f"🎯 {len(filtered)} teams to scrape for {season}")
+    print(f"{len(filtered)} teams to scrape for {season}")
+
+    config = ScraperConfig(
+        base_delay=base_delay,
+        headless=True,
+        block_resources=True,
+    )
 
     all_players = []
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=config.headless)
 
         for i in range(0, len(filtered), batch_size):
             batch = filtered[i:i + batch_size]
-            tasks = [scrape_team(browser, base, team, season) for base, team in batch]
+            print(f"\nBatch {i//batch_size + 1}: {len(batch)} teams")
+
+            tasks = [scrape_team(browser, base, team, season, config) for base, team in batch]
             results = await asyncio.gather(*tasks)
             for rows in results:
                 all_players.extend(rows)
+
+            if i + batch_size < len(filtered):
+                await asyncio.sleep(base_delay)
 
         await browser.close()
 
@@ -419,7 +444,7 @@ async def main(season=2026, limit=None, batch_size=10, missing_only=False, outdi
         df = df_new
 
     df.to_csv(outpath, index=False)
-    print(f"📦 Saved {len(df)} rows across {df['team'].nunique() if not df.empty else 0} teams → {outpath}")
+    print(f"Saved {len(df)} rows across {df['team'].nunique() if not df.empty else 0} teams -> {outpath}")
     return df
 
 
@@ -428,9 +453,10 @@ if __name__ == "__main__":
     parser.add_argument("--season", type=int, default=2025, help="Season year")
     parser.add_argument("--team", type=str, default=None, help="Specific team name to scrape")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of teams")
-    parser.add_argument("--batch-size", type=int, default=10, help="Batch size for concurrent requests")
+    parser.add_argument("--batch-size", type=int, default=5, help="Batch size for concurrent requests")
     parser.add_argument("--missing-only", action="store_true", help="Only scrape missing teams")
     parser.add_argument("--outdir", type=str, default=OUTDIR, help="Output directory")
+    parser.add_argument("--base-delay", type=float, default=3.0, help="Base delay between batches")
     args = parser.parse_args()
 
     df = asyncio.run(main(
@@ -439,5 +465,6 @@ if __name__ == "__main__":
         limit=args.limit,
         batch_size=args.batch_size,
         missing_only=args.missing_only,
-        outdir=args.outdir
+        outdir=args.outdir,
+        base_delay=args.base_delay,
     ))

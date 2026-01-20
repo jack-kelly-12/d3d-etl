@@ -1,13 +1,14 @@
 import numpy as np
 import pandas as pd
 
+
 def norm_team(s: str) -> str:
     if pd.isna(s):
         return ""
     s = str(s).lower().strip()
     s = s.replace("&", "and").replace(".", "").replace("  ", " ")
     return s
-    
+
 def build_team_to_sos(rankings_df, mappings):
     rk = rankings_df.copy()
 

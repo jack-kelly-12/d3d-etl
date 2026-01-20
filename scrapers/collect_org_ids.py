@@ -23,10 +23,11 @@ logging.basicConfig(
     ]
 )
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
 }
 
@@ -41,18 +42,51 @@ class GracefulInterruptHandler:
         signal.signal(signal.SIGTERM, self._handle_interrupt)
 
     def _handle_interrupt(self, signum, frame):
-        logging.info(
-            "Received interrupt signal, will save progress and exit...")
+        logging.info("Received interrupt signal, will save progress and exit...")
         self.interrupt_received = True
 
     def should_stop(self):
         if datetime.now() - self.start_time > timedelta(minutes=self.timeout_minutes):
             if not self.timeout_received:
-                logging.info(
-                    f"Reached {self.timeout_minutes} minute timeout, will save progress and exit...")
+                logging.info(f"Reached {self.timeout_minutes} minute timeout, will save progress and exit...")
                 self.timeout_received = True
             return True
         return self.interrupt_received or self.timeout_received
+
+
+class RateLimiter:
+    def __init__(self, base_delay=1.5, jitter=0.5, backoff_base=5.0, max_backoff=300.0):
+        self.base_delay = base_delay
+        self.jitter = jitter
+        self.backoff_base = backoff_base
+        self.max_backoff = max_backoff
+        self._consecutive_errors = 0
+        self._pause_until = None
+
+    def wait(self):
+        now = time.time()
+        if self._pause_until and now < self._pause_until:
+            sleep_time = self._pause_until - now
+            logging.info(f"Rate limit pause: sleeping {sleep_time:.1f}s")
+            time.sleep(sleep_time)
+            self._pause_until = None
+
+        delay = self.base_delay + random.uniform(-self.jitter, self.jitter)
+        time.sleep(delay)
+
+    def on_success(self):
+        self._consecutive_errors = 0
+
+    def on_error(self, status_code):
+        self._consecutive_errors += 1
+        if status_code in (403, 429, 430):
+            pause_seconds = random.uniform(120, 600)
+            self._pause_until = time.time() + pause_seconds
+            logging.warning(f"Got {status_code}, pausing for {pause_seconds:.0f}s")
+        elif status_code >= 500:
+            backoff = min(self.backoff_base * (2 ** (self._consecutive_errors - 1)), self.max_backoff)
+            logging.warning(f"Got {status_code}, backing off {backoff:.1f}s")
+            time.sleep(backoff)
 
 
 class ProgressManager:
@@ -75,8 +109,7 @@ class ProgressManager:
                             f"{BASE}/players/{item['ncaa_id']}"
                             for item in self.all_player_data
                         }
-                        logging.info(
-                            f"Loaded progress from {file}: {len(self.scraped_urls)} URLs scraped, {len(self.all_player_data)} players")
+                        logging.info(f"Loaded progress from {file}: {len(self.scraped_urls)} URLs scraped")
                         return
             except Exception as e:
                 logging.warning(f"Error loading from {file}: {e}")
@@ -94,9 +127,7 @@ class ProgressManager:
             self.temp_file.parent.mkdir(parents=True, exist_ok=True)
 
             with self.temp_file.open('w') as f:
-                json.dump({
-                    'player_data': self.all_player_data
-                }, f)
+                json.dump({'player_data': self.all_player_data}, f)
 
             if self.temp_file.exists():
                 if self.checkpoint_file.exists():
@@ -105,13 +136,10 @@ class ProgressManager:
                 import shutil
                 shutil.move(str(self.temp_file), str(self.checkpoint_file))
 
-            logging.info(
-                f"Progress saved: {len(self.scraped_urls)} URLs scraped, {len(self.all_player_data)} players found")
+            logging.info(f"Progress saved: {len(self.scraped_urls)} URLs scraped")
 
         except Exception as e:
             logging.error(f"Error saving progress: {e}")
-            import traceback
-            logging.error(traceback.format_exc())
 
 
 def get_player_ids_from_career_table(html_content):
@@ -131,14 +159,14 @@ def get_player_ids_from_career_table(html_content):
 def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
     progress = ProgressManager()
     interrupt_handler = GracefulInterruptHandler(timeout_minutes)
+    rate_limiter = RateLimiter()
     to_scrape = set(urls)
 
     processed_ncaa_ids = {item['ncaa_id'] for item in progress.all_player_data}
-
     to_scrape = to_scrape - progress.scraped_urls
 
     session = requests.Session()
-    session.headers.update(headers)
+    session.headers.update(HEADERS)
 
     try:
         with tqdm(total=len(to_scrape)) as pbar:
@@ -151,7 +179,7 @@ def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
                         break
 
                     try:
-                        time.sleep(1 + random.uniform(0, 0.5))
+                        rate_limiter.wait()
                         player_id = url.split('/players/')[-1].strip()
 
                         if player_id in processed_ncaa_ids:
@@ -159,16 +187,20 @@ def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
                             pbar.update(1)
                             continue
 
-                        response = session.get(
-                            url, headers=headers, timeout=30)
+                        response = session.get(url, headers=HEADERS, timeout=30)
 
-                        if response.status_code == 430:
+                        if response.status_code in (403, 429, 430):
                             logging.warning(f"Rate limit hit at URL: {url}")
+                            rate_limiter.on_error(response.status_code)
                             progress.save_progress()
-                            return pd.DataFrame(progress.all_player_data)
+                            continue
 
-                        player_ids = get_player_ids_from_career_table(
-                            response.content)
+                        if response.status_code >= 400:
+                            rate_limiter.on_error(response.status_code)
+                            continue
+
+                        rate_limiter.on_success()
+                        player_ids = get_player_ids_from_career_table(response.content)
 
                         if player_ids:
                             min_id = min(player_ids)
@@ -181,9 +213,7 @@ def process_players(urls, timeout_minutes: int = 290) -> pd.DataFrame:
                                         'unique_id': unique_id
                                     })
                                     processed_ncaa_ids.add(ncaa_id)
-
-                                    progress.scraped_urls.add(
-                                        f"{BASE}/players/{ncaa_id}")
+                                    progress.scraped_urls.add(f"{BASE}/players/{ncaa_id}")
 
                                     url_to_remove = f"{BASE}/players/{ncaa_id}"
                                     if url_to_remove in to_scrape:
@@ -225,8 +255,7 @@ def combine_roster_files(output_dir: str | Path) -> pd.DataFrame:
 
     combined_df = pd.concat(dfs, ignore_index=True)
     combined_df = combined_df.drop_duplicates()
-    logging.info(
-        f"Combined {len(all_files)} files into DataFrame with {len(combined_df)} rows")
+    logging.info(f"Combined {len(all_files)} files into DataFrame with {len(combined_df)} rows")
     return combined_df
 
 
@@ -247,11 +276,9 @@ def main(data_dir: str) -> None:
                 with open(progress_file) as file:
                     scraper_progress = json.load(file)['player_data']
                     scraped_df = pd.DataFrame(data=scraper_progress)
-                    ncaa_to_unique_id = dict(
-                        zip(scraped_df['ncaa_id'], scraped_df['unique_id'], strict=False))
+                    ncaa_to_unique_id = dict(zip(scraped_df['ncaa_id'], scraped_df['unique_id'], strict=False))
                     scraped_ids = set(ncaa_to_unique_id.keys())
-                    logging.info(
-                        f"Loaded {len(scraped_ids)} already scraped IDs from progress file")
+                    logging.info(f"Loaded {len(scraped_ids)} already scraped IDs from progress file")
             except Exception as e:
                 logging.error(f"Error loading progress file: {e}")
 
@@ -260,15 +287,12 @@ def main(data_dir: str) -> None:
             if pid and pid not in scraped_ids:
                 need_to_scrape.append(pid)
 
-        logging.info(
-            f"Found {len(need_to_scrape)} player IDs that need scraping")
+        logging.info(f"Found {len(need_to_scrape)} player IDs that need scraping")
 
-        urls = [
-            f'{BASE}/players/{player_id}' for player_id in need_to_scrape]
+        urls = [f'{BASE}/players/{player_id}' for player_id in need_to_scrape]
 
         result_df = process_players(urls)
-        logging.info(
-            f"Finished processing with {len(result_df)} player records")
+        logging.info(f"Finished processing with {len(result_df)} player records")
 
         return 0
 
@@ -280,8 +304,7 @@ def main(data_dir: str) -> None:
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', required=True,
-                        help='Root directory containing the data folders')
+    parser.add_argument('--data_dir', required=True, help='Root directory containing the data folders')
     args = parser.parse_args()
 
     sys.exit(main(args.data_dir))

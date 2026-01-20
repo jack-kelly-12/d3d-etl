@@ -2,58 +2,76 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pbp_parser.constants import EventType
 
 
-def calculate_college_linear_weights(pbp_data: pd.DataFrame, re24_matrix: pd.DataFrame) -> pd.DataFrame:
+def calculate_linear_weights(pbp_data: pd.DataFrame, re24_matrix: pd.DataFrame) -> pd.DataFrame:
     event_types = ["walk", "hit_by_pitch", "single", "double", "triple", "home_run", "out", "other"]
     event_counts = dict.fromkeys(event_types, 0)
     event_re24_sums = dict.fromkeys(event_types, 0.0)
 
-    event_lookup = {
-        "2": "out", "3": "out", "6": "out",
-        "14": "walk", "16": "hit_by_pitch",
-        "20": "single", "21": "double",
-        "22": "triple", "23": "home_run"
+    out_events = {
+        EventType.GENERIC_OUT, EventType.STRIKEOUT, EventType.CAUGHT_STEALING,
+        EventType.PICKOFF, EventType.FIELDERS_CHOICE, EventType.STRIKEOUT_PASSED_BALL,
+        EventType.STRIKEOUT_WILD_PITCH
     }
 
-    base_state_map = {
-        "0": "_ _ _",  # No runners
-        "1": "1B _ _",  # Runner on first
-        "2": "_ 2B _",  # Runner on second
-        "3": "_ _ 3B",  # Runner on third
-        "4": "1B 2B _",  # Runners on first and second
-        "5": "1B _ 3B",  # Runners on first and third
-        "6": "_ 2B 3B",  # Runners on second and third
-        "7": "1B 2B 3B"  # Bases loaded
-    }
+    def map_event(event_val):
+        try:
+            ev = int(event_val)
+        except (ValueError, TypeError):
+            return "other"
 
-    def get_re(base_cd, outs):
-        base_states = base_cd.astype(str).map(base_state_map).fillna("___")
-        base_idx = base_states.map(
-            {v: i for i, v in enumerate(re24_matrix["bases"], start=0)}
-        )
+        if ev in out_events or ev in {e.value for e in out_events}:
+            return "out"
+        if ev == EventType.WALK or ev == EventType.INTENTIONAL_WALK:
+            return "walk"
+        if ev == EventType.HIT_BY_PITCH:
+            return "hit_by_pitch"
+        if ev == EventType.SINGLE:
+            return "single"
+        if ev == EventType.DOUBLE:
+            return "double"
+        if ev == EventType.TRIPLE:
+            return "triple"
+        if ev == EventType.HOME_RUN:
+            return "home_run"
+        return "other"
 
+    re_bases_to_idx = {b: i for i, b in enumerate(re24_matrix["bases"])}
+
+    def get_re(bases, outs):
         out_cols = ["erv_0", "erv_1", "erv_2"]
-        outs_idx = np.clip(outs.astype(int).values, 0, 2)
-
         values = []
-        for i, row in enumerate(base_idx):
-            if pd.isna(row) or pd.isna(outs_idx[i]):
-                values.append(0)
+        for base_state, out_val in zip(bases, outs, strict=True):
+            if pd.isna(base_state) or pd.isna(out_val):
+                values.append(0.0)
+                continue
+
+            base_idx = re_bases_to_idx.get(base_state, -1)
+            out_idx = int(out_val) if not pd.isna(out_val) else 0
+            out_idx = np.clip(out_idx, 0, 2)
+
+            if base_idx >= 0 and base_idx < len(re24_matrix):
+                col = out_cols[out_idx]
+                values.append(float(re24_matrix.iloc[base_idx][col]))
             else:
-                col = out_cols[outs_idx[i]]
-                values.append(re24_matrix.loc[row, col])
+                values.append(0.0)
         return np.array(values, dtype=float)
 
-    re_start = get_re(pbp_data["base_cd_before"], pbp_data["outs_before"])
-    re_end = np.append(get_re(pbp_data["base_cd_before"].iloc[1:], pbp_data["outs_before"].iloc[1:]), 0)
+    re_start = get_re(pbp_data["bases_before"], pbp_data["outs_before"])
 
-    re_end[pbp_data["inn_end_flag"] == 1] = 0
+    bases_after = pbp_data["bases_after"] if "bases_after" in pbp_data.columns else pbp_data["bases_before"].shift(-1)
+    outs_after = pbp_data["outs_after"] if "outs_after" in pbp_data.columns else pbp_data["outs_before"].shift(-1)
+    re_end = get_re(bases_after, outs_after)
+
+    inn_end = pbp_data["inn_end_fl"].fillna(0).astype(int).values
+    re_end[inn_end == 1] = 0
 
     runs_on_play = pd.to_numeric(pbp_data["runs_on_play"], errors="coerce").fillna(0).values
     re24 = re_end - re_start + runs_on_play
 
-    events = pbp_data["event_cd"].astype(str).map(event_lookup).fillna("other")
+    events = pbp_data["event_type"].apply(map_event)
 
     event_table = events.value_counts().reindex(event_types, fill_value=0)
     for e in event_types:
@@ -123,21 +141,21 @@ def main(data_dir: str, year: int, divisions: list = None):
         re_path = Path(data_dir) / f"miscellaneous/{div_name}_expected_runs_{year}.csv"
 
         if not pbp_path.exists():
-            print(f"⚠️ PBP file not found: {pbp_path}, skipping")
+            print(f"Play by play file not found: {pbp_path}, skipping")
             continue
 
-        pbp_data = pd.read_csv(pbp_path)
+        pbp_data = pd.read_csv(pbp_path, low_memory=False)
         re24_matrix = pd.read_csv(re_path)
         stats = pd.read_csv(stats_path)
 
-        lw = calculate_college_linear_weights(pbp_data, re24_matrix)
+        lw = calculate_linear_weights(pbp_data, re24_matrix)
         lw = calculate_normalized_linear_weights(lw, stats)
 
         output_path = Path(data_dir) / f"miscellaneous/{div_name}_linear_weights_{year}.csv"
         lw.to_csv(output_path, index=False)
-        print(f"✅ Saved linear weights to {output_path}")
+        print(f"Saved linear weights to {output_path}")
 
-    print("🎉 Linear weights calculated successfully!")
+    print("Linear weights calculated successfully!")
 
 
 if __name__ == "__main__":

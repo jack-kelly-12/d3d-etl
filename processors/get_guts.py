@@ -1,110 +1,144 @@
 from pathlib import Path
 
 import pandas as pd
+from pbp_parser.constants import EventType
 
 
-def calculate_woba_constants(lw_df, batting_df):
-    woba_scale = lw_df[lw_df['events'] ==
-                       'woba_scale']['normalized_weight'].iloc[0]
+def safe_divide(num, denom, fill=0.0):
+    """Safe division returning fill value when denominator is 0."""
+    return num / denom if denom > 0 else fill
+
+
+def ip_to_float(ip_str) -> float:
+    """Convert baseball IP notation (e.g., '6.2') to decimal innings."""
+    try:
+        ip = str(ip_str)
+        if '.' not in ip:
+            return float(ip)
+        whole, partial = ip.split('.')
+        thirds = {0: 0, 1: 1/3, 2: 2/3}.get(int(partial), 0)
+        return int(whole) + thirds
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def calculate_woba_constants(lw_df: pd.DataFrame, batting_df: pd.DataFrame) -> dict:
+    """Calculate wOBA and linear weight constants."""
+    lw = lw_df.set_index('events')['normalized_weight']
 
     weights = {
-        'wbb': lw_df[lw_df['events'] == 'walk']['normalized_weight'].iloc[0],
-        'whbp': lw_df[lw_df['events'] == 'hit_by_pitch']['normalized_weight'].iloc[0],
-        'w1b': lw_df[lw_df['events'] == 'single']['normalized_weight'].iloc[0],
-        'w2b': lw_df[lw_df['events'] == 'double']['normalized_weight'].iloc[0],
-        'w3b': lw_df[lw_df['events'] == 'triple']['normalized_weight'].iloc[0],
-        'whr': lw_df[lw_df['events'] == 'home_run']['normalized_weight'].iloc[0]
+        'wbb': lw.get('walk', 0),
+        'whbp': lw.get('hit_by_pitch', 0),
+        'w1b': lw.get('single', 0),
+        'w2b': lw.get('double', 0),
+        'w3b': lw.get('triple', 0),
+        'whr': lw.get('home_run', 0),
+        'woba_scale': lw.get('woba_scale', 1.0),
     }
 
-    woba_numerator = (
+    # Calculate league wOBA
+    singles = batting_df['h'] - batting_df['2b'] - batting_df['3b'] - batting_df['hr']
+
+    woba_num = (
         batting_df['bb'].sum() * weights['wbb'] +
         batting_df['hbp'].sum() * weights['whbp'] +
-        batting_df['1b'].sum() * weights['w1b'] +
+        singles.sum() * weights['w1b'] +
         batting_df['2b'].sum() * weights['w2b'] +
         batting_df['3b'].sum() * weights['w3b'] +
         batting_df['hr'].sum() * weights['whr']
     )
 
-    woba_denominator = batting_df['ab'].sum(
-    ) + batting_df['bb'].sum() + batting_df['hbp'].sum() + batting_df['sf'].sum()
-    woba = woba_numerator / woba_denominator if woba_denominator > 0 else 0
+    woba_denom = (
+        batting_df['ab'].sum() +
+        batting_df['bb'].sum() +
+        batting_df['hbp'].sum() +
+        batting_df['sf'].sum()
+    )
 
-    return {'woba': round(woba, 3), 'woba_scale': woba_scale, **weights}
+    weights['woba'] = round(safe_divide(woba_num, woba_denom), 3)
+
+    return weights
 
 
-def calculate_baserunning_constants(pbp_df):
-    runs_out = pbp_df['runs_on_play'].sum() / pbp_df['outs_on_play'].sum()
+def calculate_baserunning_constants(pbp_df: pd.DataFrame) -> dict:
+    """Calculate stolen base run values."""
+    runs_out = safe_divide(
+        pbp_df['runs_on_play'].sum(),
+        pbp_df['outs_on_play'].sum()
+    )
+
     run_sb = 0.2
     run_cs = -(2 * runs_out + 0.075)
 
-    cs_attempts = len(pbp_df[pbp_df['event_cd'] == 6])
-    sb_attempts = len(pbp_df[pbp_df['event_cd'] == 4])
-    cs_rate = cs_attempts / \
-        (cs_attempts + sb_attempts) if (cs_attempts + sb_attempts) > 0 else 0
+    sb_events = len(pbp_df[pbp_df['event_type'] == EventType.STOLEN_BASE])
+    cs_events = len(pbp_df[pbp_df['event_type'] == EventType.CAUGHT_STEALING])
+
+    cs_rate = safe_divide(cs_events, sb_events + cs_events)
 
     return {
-        'runs_sb': run_sb,
-        'runs_cs': run_cs,
-        'cs_rate': round(cs_rate, 3)
+        'runs_sb': round(run_sb, 3),
+        'runs_cs': round(run_cs, 3),
+        'cs_rate': round(cs_rate, 3),
     }
 
 
-def calculate_run_constants(pbp_df):
-    runs_pa = pbp_df['runs_on_play'].sum(
-    ) / len(pbp_df[~pbp_df['bat_order'].isna()])
-    runs_out = pbp_df['runs_on_play'].sum() / pbp_df['outs_on_play'].sum()
-    runs_win = pbp_df.groupby('contest_id')['runs_on_play'].sum().mean()
+def calculate_run_constants(pbp_df: pd.DataFrame) -> dict:
+    """Calculate run environment constants."""
+    # Plate appearances = rows with a batter
+    pa_events = pbp_df[pbp_df['bat_order'].notna()]
+
+    runs_pa = safe_divide(
+        pbp_df['runs_on_play'].sum(),
+        len(pa_events)
+    )
+
+    runs_out = safe_divide(
+        pbp_df['runs_on_play'].sum(),
+        pbp_df['outs_on_play'].sum()
+    )
+
+    runs_win = (pbp_df.groupby('contest_id')['runs_on_play'].sum().mean() / 2) * 1.5 + 3
 
     return {
-        'runs_pa': runs_pa,
-        'runs_out': runs_out,
-        'runs_win': runs_win
+        'runs_pa': round(runs_pa, 4),
+        'runs_out': round(runs_out, 4),
+        'runs_win': round(runs_win, 3),
     }
 
-def ip_to_real(innings):
-        ip_str = str(innings)
-        if '.' in ip_str:
-            whole_innings, partial = ip_str.split('.')
-            whole_innings = int(whole_innings)
-            partial = int(partial)
-        else:
-            return float(ip_str)
 
-        if partial == 0:
-            decimal_part = 0
-        elif partial == 1:
-            decimal_part = 1/3
-        elif partial == 2:
-            decimal_part = 2/3
-        else:
-            raise ValueError(
-                "Invalid partial inning value. Should be 0, 1, or 2.")
+def calculate_fip_constant(pitching_df: pd.DataFrame) -> float:
+    pitching_df = pitching_df.copy()
+    pitching_df['ip_float'] = pitching_df['ip'].apply(ip_to_float)
 
-        return whole_innings + decimal_part
+    total_ip = pitching_df['ip_float'].sum()
+
+    lg_era = (pitching_df['er'].sum() * 9) / total_ip
+
+    fip_components = (
+        13 * pitching_df['hr_a'].sum() +
+        3 * (pitching_df['bb'].sum() + pitching_df['hbp'].sum()) -
+        2 * pitching_df['so'].sum()
+    ) / total_ip
+
+    return round(lg_era - fip_components, 3)
 
 
-def calculate_fip_constant(pitching_df):
-    pitching_df['ip_float'] = pitching_df.ip.apply(ip_to_real)
-    lgERA = (pitching_df['er'].sum() * 9) / pitching_df['ip_float'].sum()
-    fip_components = (13 * pitching_df['hr_a'].sum() +
-                      3 * (pitching_df['bb'].sum() + pitching_df['hbp'].sum()) -
-                      2 * pitching_df['so'].sum()) / pitching_df['ip_float'].sum()
-    return lgERA - fip_components
-
-
-def calculate_guts_constants(division, year, output_path):
+def calculate_guts_constants(division: int, year: int, data_dir: Path) -> dict | None:
+    """Calculate all GUTS constants for a division/year."""
     try:
         pbp_df = pd.read_csv(
-            output_path / f'pbp/d{division}_parsed_pbp_new_{year}.csv')
+            data_dir / f'pbp/d{division}_pbp_with_metrics_{year}.csv',
+            low_memory=False
+        )
         lw_df = pd.read_csv(
-            output_path / f'miscellaneous/d{division}_linear_weights_{year}.csv')
+            data_dir / f'miscellaneous/d{division}_linear_weights_{year}.csv'
+        )
         pitching_df = pd.read_csv(
-            output_path / f'stats/d{division}_pitching_{year}.csv')
+            data_dir / f'stats/d{division}_pitching_{year}.csv'
+        )
         batting_df = pd.read_csv(
-            output_path / f'stats/d{division}_batting_{year}.csv')
-
-        batting_df['1b'] = batting_df['h'] - batting_df['2b'] - \
-            batting_df['3b'] - batting_df['hr']
+            data_dir / f'stats/d{division}_batting_{year}.csv'
+        )
 
         constants = {
             'year': year,
@@ -112,17 +146,21 @@ def calculate_guts_constants(division, year, output_path):
             **calculate_woba_constants(lw_df, batting_df),
             **calculate_baserunning_constants(pbp_df),
             **calculate_run_constants(pbp_df),
-            'cfip': calculate_fip_constant(pitching_df)
+            'cfip': calculate_fip_constant(pitching_df),
         }
 
         return constants
 
+    except FileNotFoundError as e:
+        print(f"Missing file for D{division} {year}: {e}")
+        return None
     except Exception as e:
         print(f"Error calculating constants for D{division} {year}: {e}")
         return None
 
 
-def main(data_dir, year, divisions=None):
+def main(data_dir: str, year: int, divisions: list[int] = None):
+    """Calculate and save GUTS constants."""
     data_dir = Path(data_dir)
     guts_dir = data_dir / 'guts'
     guts_dir.mkdir(exist_ok=True)
@@ -132,25 +170,29 @@ def main(data_dir, year, divisions=None):
     if divisions is None:
         divisions = [1, 2, 3]
 
-    all_constants = []
-    existing_guts = pd.read_csv(guts_file)
-    existing_guts = existing_guts[(
-        existing_guts['year'] != int(year))]
+    if guts_file.exists():
+        existing = pd.read_csv(guts_file)
+        existing = existing[existing['year'] != int(year)]
+    else:
+        existing = pd.DataFrame()
 
+    new_constants = []
     for division in divisions:
         constants = calculate_guts_constants(division, year, data_dir)
         if constants:
-            all_constants.append(constants)
+            new_constants.append(constants)
+            print(f"Calculated D{division} {year} constants")
 
-    new_guts = pd.DataFrame(all_constants)
+    if not new_constants:
+        print("No constants calculated")
+        return
 
-    guts = pd.concat([existing_guts, new_guts])
-
-    guts = guts.sort_values(
-        ['division', 'year'], ascending=[True, False])
+    new_df = pd.DataFrame(new_constants)
+    guts = pd.concat([existing, new_df], ignore_index=True)
+    guts = guts.sort_values(['division', 'year'], ascending=[True, False])
 
     guts.to_csv(guts_file, index=False)
-    print(f"Saved {len(new_guts)} rows of Guts constants")
+    print(f"Saved {len(new_constants)} rows to {guts_file}")
 
 
 if __name__ == '__main__':
@@ -158,8 +200,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', required=True)
     parser.add_argument('--year', required=True, type=int)
-    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3],
-                        help='Divisions to process (default: 1 2 3)')
+    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3])
     args = parser.parse_args()
 
     main(args.data_dir, args.year, args.divisions)
