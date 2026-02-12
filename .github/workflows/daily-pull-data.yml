@@ -39,6 +39,11 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
+      - name: Install Xvfb (headed Playwright support)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -54,6 +59,7 @@ jobs:
           PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
           LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
         run: |
+          set -euo pipefail
           mkdir -p "$DATA_ROOT" "$SCHEDULES_OUTDIR" "$STATS_OUTDIR" "$PBP_OUTDIR" "$LINEUPS_OUTDIR"
 
       - name: Optional S3 pre-pull
@@ -64,6 +70,7 @@ jobs:
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
+          set -euo pipefail
           python -m s3_utils.sync_data \
             --mode pull \
             --bucket "$S3_BUCKET" \
@@ -71,7 +78,7 @@ jobs:
             --local_dir "$DATA_ROOT" \
             --region "$AWS_REGION"
 
-      - name: Run NCAA sequentially
+      - name: Run NCAA sequentially (headed via Xvfb)
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
@@ -92,33 +99,37 @@ jobs:
             echo "ERROR: vars.DIVISIONS is empty (example: 1,2,3)"
             exit 1
           fi
+          if [ -z "${TEAM_IDS_FILE:-}" ]; then
+            echo "ERROR: vars.TEAM_IDS_FILE is empty"
+            exit 1
+          fi
 
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
           for YEAR in "${YEARS_ARR[@]}"; do
-            python -m scrapers.collect_schedules \
+            xvfb-run -a python -m scrapers.collect_schedules \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
 
-            python -m scrapers.collect_stats \
+            xvfb-run -a python -m scrapers.collect_stats \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$STATS_OUTDIR" \
               --base_delay "$BASE_DELAY"
 
-            python -m scrapers.collect_pbp \
+            xvfb-run -a python -m scrapers.collect_pbp \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
               --outdir "$PBP_OUTDIR" \
               --base_delay "$BASE_DELAY"
 
-            python -m scrapers.collect_lineups \
+            xvfb-run -a python -m scrapers.collect_lineups \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
@@ -181,6 +192,11 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
+      - name: Install Xvfb (headed Playwright support)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -192,9 +208,10 @@ jobs:
         env:
           RANKINGS_OUTDIR: ${{ vars.RANKINGS_OUTDIR }}
         run: |
+          set -euo pipefail
           mkdir -p "$RANKINGS_OUTDIR"
 
-      - name: Run rankings scraper
+      - name: Run rankings scraper (headed via Xvfb)
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
@@ -215,7 +232,7 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
-          python -m scrapers.collect_rankings \
+          xvfb-run -a python -m scrapers.collect_rankings \
             --data_dir "$RANKINGS_OUTDIR" \
             --years "${YEARS_ARR[@]}" \
             --divisions "${DIVS_ARR[@]}" \
