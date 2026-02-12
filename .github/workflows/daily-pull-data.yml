@@ -1,17 +1,16 @@
-name: Daily Scrapers
+name: Daily Pull
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 7 * * *"
 
-# Prevent overlapping daily runs (e.g., if NCAA site is slow)
 concurrency:
   group: d3d-etl-daily
   cancel-in-progress: false
 
 jobs:
-  ncaa-scrapers:
+  ncaa-pull-data:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -72,7 +71,7 @@ jobs:
             --local_dir "$DATA_ROOT" \
             --region "$AWS_REGION"
 
-      - name: Run NCAA scrapers sequentially
+      - name: Run NCAA sequentially
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
@@ -191,16 +190,16 @@ jobs:
 
       - name: Ensure rankings dir exists
         env:
-          RANKINGS_DATA_DIR: ${{ vars.RANKINGS_DATA_DIR }}
+          RANKINGS_OUTDIR: ${{ vars.RANKINGS_OUTDIR }}
         run: |
-          mkdir -p "$RANKINGS_DATA_DIR"
+          mkdir -p "$RANKINGS_OUTDIR"
 
       - name: Run rankings scraper
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
           BASE_DELAY: ${{ vars.BASE_DELAY }}
-          RANKINGS_DATA_DIR: ${{ vars.RANKINGS_DATA_DIR }}
+          RANKINGS_OUTDIR: ${{ vars.RANKINGS_OUTDIR }}
         run: |
           set -euo pipefail
 
@@ -217,7 +216,7 @@ jobs:
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
           python -m scrapers.collect_rankings \
-            --data_dir "$RANKINGS_DATA_DIR" \
+            --data_dir "$RANKINGS_OUTDIR" \
             --years "${YEARS_ARR[@]}" \
             --divisions "${DIVS_ARR[@]}" \
             --base_delay "$BASE_DELAY"
@@ -225,7 +224,7 @@ jobs:
       - name: Always upload rankings outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
         env:
-          RANKINGS_DATA_DIR: ${{ vars.RANKINGS_DATA_DIR }}
+          RANKINGS_OUTDIR: ${{ vars.RANKINGS_OUTDIR }}
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -242,6 +241,6 @@ jobs:
             --mode push \
             --bucket "$S3_BUCKET" \
             --prefix "${S3_PREFIX%/}/rankings" \
-            --local_dir "$RANKINGS_DATA_DIR" \
+            --local_dir "$RANKINGS_OUTDIR" \
             --region "$AWS_REGION" \
             "${EXTRA_ARGS[@]}"
