@@ -1,7 +1,8 @@
 from pathlib import Path
 
 import pandas as pd
-from pbp_parser.constants import EventType
+
+from processors.pbp_parser.constants import EventType
 
 
 def safe_divide(num, denom, fill=0.0):

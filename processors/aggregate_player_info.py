@@ -2,172 +2,215 @@ from pathlib import Path
 
 import pandas as pd
 
+INVALID_STRS = {"", "-", "nan", "none", "null"}
+SOURCE_PRIORITY = {"roster": 0, "batting_war": 1, "pitching_war": 2}
+
 
 def is_valid(val) -> bool:
     if pd.isna(val):
         return False
-    if isinstance(val, str) and val.strip() in ('', '-', 'nan', 'None'):
-        return False
-    return True
+    return str(val).strip().lower() not in INVALID_STRS
 
 
-def first_valid(series: pd.Series):
-    for val in series:
-        if is_valid(val):
-            return val
-    return None
+def clean_str(val) -> str:
+    if not is_valid(val):
+        return ""
+    return str(val).strip()
 
 
 def standardize_hand(val) -> str:
-    if not is_valid(val):
-        return ''
-    val = str(val).strip().upper()
-    if val in ('R', 'RIGHT'):
-        return 'R'
-    if val in ('L', 'LEFT'):
-        return 'L'
-    if val in ('S', 'SWITCH', 'B', 'BOTH'):
-        return 'S'
-    return val
+    v = clean_str(val).upper()
+    if not v:
+        return ""
+    if v in {"R", "RIGHT"}:
+        return "R"
+    if v in {"L", "LEFT"}:
+        return "L"
+    if v in {"S", "SWITCH", "B", "BOTH"}:
+        return "S"
+    return ""
 
 
-def load_rosters(data_dir: Path, divisions: list[int], years: list[int]) -> pd.DataFrame:
-    dfs = []
+def first_valid(series: pd.Series) -> str:
+    for val in series:
+        if is_valid(val):
+            return clean_str(val)
+    return ""
+
+
+def roster_paths(data_dir: Path, divisions: list[int], years: list[int]) -> list[tuple[int, int, Path]]:
+    paths = []
     for division in divisions:
         for year in years:
-            path = data_dir / f'rosters/d{division}_rosters_{year}.csv'
-            if not path.exists():
-                continue
-            df = pd.read_csv(path, dtype={'player_id': str}, low_memory=False)
-            df['source_year'] = year
-            df['source'] = 'roster'
-            dfs.append(df)
-
-    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+            path = data_dir / f"rosters/d{division}_rosters_{year}.csv"
+            if path.exists():
+                paths.append((division, year, path))
+    return paths
 
 
-def load_stats(data_dir: Path, divisions: list[int], years: list[int]) -> pd.DataFrame:
-    dfs = []
+def war_paths(data_dir: Path, divisions: list[int], years: list[int], war_type: str) -> list[tuple[int, int, Path]]:
+    paths = []
     for division in divisions:
         for year in years:
-            for stat_type in ['batting', 'pitching']:
-                path = data_dir / f'stats/d{division}_{stat_type}_{year}.csv'
-                if not path.exists():
-                    continue
-                df = pd.read_csv(path, dtype={'player_id': str}, low_memory=False)
-                df['source_year'] = year
-                df['source'] = stat_type
-                dfs.append(df)
+            path = data_dir / f"war/d{division}_{war_type}_war_{year}.csv"
+            if path.exists():
+                paths.append((division, year, path))
+    return paths
 
-    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
+def load_rows(path: Path, source: str, division: int, year: int) -> pd.DataFrame:
+    df = pd.read_csv(path, dtype={"player_id": str}, low_memory=False)
+    out = pd.DataFrame(index=df.index)
+    out["player_id"] = df["player_id"] if "player_id" in df.columns else ""
+    out["player_name"] = df["player_name"] if "player_name" in df.columns else ""
+    out["team_name"] = df["team_name"] if "team_name" in df.columns else ""
+    out["bats"] = df["bats"] if "bats" in df.columns else ""
+    out["throws"] = df["throws"] if "throws" in df.columns else ""
+    out["division"] = division
+    out["year"] = year
+    out["source"] = source
+    out["source_priority"] = SOURCE_PRIORITY[source]
+
+    out["player_id"] = out["player_id"].map(clean_str)
+    out["player_name"] = out["player_name"].map(clean_str)
+    out["team_name"] = out["team_name"].map(clean_str)
+    out["bats"] = out["bats"].map(standardize_hand)
+    out["throws"] = out["throws"].map(standardize_hand)
+    return out
+
+
+def load_sources(data_dir: Path, divisions: list[int], years: list[int]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    roster_rows = []
+    batting_war_rows = []
+    pitching_war_rows = []
+
+    for division, year, path in roster_paths(data_dir, divisions, years):
+        roster_rows.append(load_rows(path, "roster", division, year))
+    for division, year, path in war_paths(data_dir, divisions, years, "batting"):
+        batting_war_rows.append(load_rows(path, "batting_war", division, year))
+    for division, year, path in war_paths(data_dir, divisions, years, "pitching"):
+        pitching_war_rows.append(load_rows(path, "pitching_war", division, year))
+
+    rosters = pd.concat(roster_rows, ignore_index=True) if roster_rows else pd.DataFrame()
+    batting_war = pd.concat(batting_war_rows, ignore_index=True) if batting_war_rows else pd.DataFrame()
+    pitching_war = pd.concat(pitching_war_rows, ignore_index=True) if pitching_war_rows else pd.DataFrame()
+    return rosters, batting_war, pitching_war
 
 
 def aggregate_players(data_dir: Path, divisions: list[int], years: list[int]) -> pd.DataFrame:
-    print("Loading rosters...")
-    rosters = load_rosters(data_dir, divisions, years)
-
-    print("Loading stats...")
-    stats = load_stats(data_dir, divisions, years)
-
-    all_data = pd.concat([rosters, stats], ignore_index=True) if not stats.empty else rosters
-
-    if all_data.empty:
+    rosters, batting_war, pitching_war = load_sources(data_dir, divisions, years)
+    if rosters.empty and batting_war.empty and pitching_war.empty:
         return pd.DataFrame()
 
-    all_data = all_data[all_data['player_id'].apply(is_valid)]
-    all_data = all_data.sort_values('source_year', ascending=False)
+    pieces = []
+    for frame in (rosters, batting_war, pitching_war):
+        if frame.empty:
+            continue
+        pieces.append(frame)
 
-    print(f"Aggregating {len(all_data)} records for {all_data['player_id'].nunique()} players...")
+    all_rows = pd.concat(pieces, ignore_index=True)
+    all_rows = all_rows[all_rows["player_id"].map(is_valid)].copy()
+    if all_rows.empty:
+        return pd.DataFrame()
 
-    fields = ['player_name', 'bats', 'throws', 'height', 'weight']
-    fields = [f for f in fields if f in all_data.columns]
+    all_rows = all_rows.sort_values(["source_priority", "year"], ascending=[True, False])
 
-    result = all_data.groupby('player_id').agg(dict.fromkeys(fields, first_valid)).reset_index()
-
-    result['bats'] = result['bats'].apply(standardize_hand)
-    result['throws'] = result['throws'].apply(standardize_hand)
-
-    for col in ['height', 'weight']:
-        if col in result.columns:
-            result[col] = result[col].fillna('')
-
+    result = (
+        all_rows.groupby("player_id", as_index=False)
+        .agg(
+            {
+                "player_name": first_valid,
+                "team_name": first_valid,
+                "bats": first_valid,
+                "throws": first_valid,
+            }
+        )
+    )
+    result["bats"] = result["bats"].map(standardize_hand)
+    result["throws"] = result["throws"].map(standardize_hand)
     return result
 
 
-def merge_to_rosters(data_dir: Path, player_info: pd.DataFrame,
-                     divisions: list[int], years: list[int]):
-    """Merge aggregated player info back to all roster files."""
-    if player_info.empty:
-        return
+def fill_missing_from_info(df: pd.DataFrame, info: pd.DataFrame, key: str) -> pd.DataFrame:
+    if key not in df.columns or key not in info.columns:
+        return df
 
-    fill_cols = ['bats', 'throws', 'height', 'weight']
-    fill_cols = [c for c in fill_cols if c in player_info.columns]
+    out = df.copy()
+    if "bats" not in out.columns:
+        out["bats"] = ""
+    if "throws" not in out.columns:
+        out["throws"] = ""
 
-    for division in divisions:
-        for year in years:
-            path = data_dir / f'rosters/d{division}_rosters_{year}.csv'
-            if not path.exists():
-                continue
+    merged = out.merge(
+        info[[key, "bats", "throws"]].drop_duplicates(subset=[key]),
+        on=key,
+        how="left",
+        suffixes=("", "__info"),
+    )
 
-            roster = pd.read_csv(path, dtype={'player_id': str}, low_memory=False)
+    merged["bats"] = merged["bats"].map(standardize_hand)
+    merged["throws"] = merged["throws"].map(standardize_hand)
+    merged["bats__info"] = merged["bats__info"].map(standardize_hand)
+    merged["throws__info"] = merged["throws__info"].map(standardize_hand)
 
-            merged = roster.merge(
-                player_info[['player_id'] + fill_cols],
-                on='player_id',
-                how='left',
-                suffixes=('', '_agg')
-            )
+    merged["bats"] = merged["bats"].where(merged["bats"].map(is_valid), merged["bats__info"])
+    merged["throws"] = merged["throws"].where(merged["throws"].map(is_valid), merged["throws__info"])
+    return merged.drop(columns=["bats__info", "throws__info"], errors="ignore")
 
-            for col in fill_cols:
-                agg_col = f'{col}_agg'
-                if agg_col in merged.columns:
-                    merged[col] = merged[col].where(
-                        merged[col].apply(is_valid),
-                        merged[agg_col]
-                    )
-                    merged.drop(columns=[agg_col], inplace=True)
 
+def merge_to_rosters(data_dir: Path, player_info: pd.DataFrame, divisions: list[int], years: list[int]) -> None:
+    info = player_info[["player_id", "bats", "throws"]].copy()
+    for _, _, path in roster_paths(data_dir, divisions, years):
+        roster = pd.read_csv(path, dtype={"player_id": str}, low_memory=False)
+        merged = fill_missing_from_info(roster, info, key="player_id")
+        merged.to_csv(path, index=False)
+        print(f"Updated {path}")
+
+
+def merge_to_war(data_dir: Path, player_info: pd.DataFrame, divisions: list[int], years: list[int]) -> None:
+    info = player_info[["player_id", "bats", "throws"]].copy()
+    for suffix in ("batting", "pitching"):
+        for _, _, path in war_paths(data_dir, divisions, years, suffix):
+            war = pd.read_csv(path, dtype={"player_id": str}, low_memory=False)
+            merged = fill_missing_from_info(war, info, key="player_id")
             merged.to_csv(path, index=False)
             print(f"Updated {path}")
 
 
-def main(data_dir: str, divisions: list[int] = None, years: list[int] = None):
-    data_dir = Path(data_dir)
-
-    if divisions is None:
-        divisions = [1, 2, 3]
+def main(data_dir: str, divisions: list[int] | None = None, years: list[int] | None = None) -> None:
+    data_dir_path = Path(data_dir)
+    divisions = divisions or [1, 2, 3]
 
     if years is None:
-        roster_dir = data_dir / 'rosters'
-        years = sorted({
-            int(f.stem.split('_')[-1])
-            for f in roster_dir.glob('d*_rosters_*.csv')
-        }) if roster_dir.exists() else list(range(2021, 2026))
+        years = sorted(
+            {
+                int(path.stem.split("_")[-1])
+                for _, _, path in roster_paths(data_dir_path, divisions, list(range(2000, 2101)))
+            }
+        )
 
-    print(f"Processing D{divisions} for {years}")
-
-    result = aggregate_players(data_dir, divisions, years)
-
-    if result.empty:
-        print("No data found!")
+    player_info = aggregate_players(data_dir_path, divisions, years)
+    if player_info.empty:
+        print("No player data found.")
         return
 
-    output_path = data_dir / 'rosters' / 'player_information.csv'
-    result.to_csv(output_path, index=False)
-    print(f"Saved {len(result)} players to {output_path}")
+    output_path = data_dir_path / "rosters" / "player_information.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    player_info.to_csv(output_path, index=False)
+    print(f"Saved {len(player_info)} players to {output_path}")
 
-    print("Merging player info back to roster files...")
-    merge_to_rosters(data_dir, result, divisions, years)
-
+    merge_to_rosters(data_dir_path, player_info, divisions, years)
+    merge_to_war(data_dir_path, player_info, divisions, years)
     print("Done!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', required=True)
-    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3])
-    parser.add_argument('--years', nargs='+', type=int, default=None)
+    parser.add_argument("--data_dir", required=True)
+    parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
+    parser.add_argument("--years", nargs="+", type=int, default=None)
     args = parser.parse_args()
 
     main(args.data_dir, args.divisions, args.years)

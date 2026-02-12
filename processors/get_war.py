@@ -2,10 +2,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from war_calculator.batting import calculate_batting_war, calculate_team_batting
-from war_calculator.constants import REP_WP, batting_columns, pitching_columns
-from war_calculator.pitching import calculate_pitching_war, calculate_team_pitching
-from war_calculator.sos_utils import normalize_division_war, sos_reward_punish
+
+from processors.war_calculation.batting import calculate_batting_war, calculate_team_batting
+from processors.war_calculation.constants import (
+    BAT_STAT_COLUMNS,
+    PITCH_STAT_COLUMNS,
+    REP_WP,
+    batting_columns,
+    pitching_columns,
+)
+from processors.war_calculation.pitching import calculate_pitching_war, calculate_team_pitching
+from processors.war_calculation.sos_utils import normalize_division_war, sos_reward_punish
 
 
 @dataclass
@@ -33,6 +40,9 @@ def load_stats(data_dir: Path, division: int, year: int) -> tuple[pd.DataFrame, 
 
     batting = batting.merge(roster[['ncaa_id', 'player_id']], on='ncaa_id', how='left')
     pitching = pitching.merge(roster[['ncaa_id', 'player_id']], on='ncaa_id', how='left')
+
+    batting[BAT_STAT_COLUMNS] = batting[BAT_STAT_COLUMNS].fillna(0)
+    pitching[PITCH_STAT_COLUMNS] = pitching[PITCH_STAT_COLUMNS].fillna(0)
 
     return batting, pitching
 
@@ -88,16 +98,16 @@ def process_division(
     division: int,
     year: int
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-
     batting_war, team_batting_clutch = calculate_batting_war(
         data.batting, data.guts, data.park_factors, data.pbp, division, year
     )
 
     pitching_war, team_pitching_clutch = calculate_pitching_war(
-        data.pitching, data.pbp, data.park_factors,
+        data.pitching, data.pbp, data.park_factors, data.guts,
         bat_war_total=batting_war['war'].sum(),
         year=year, division=division
     )
+
 
     batting_war, pitching_war, missing = sos_reward_punish(
         batting_war, pitching_war, data.rankings, mappings,
@@ -111,7 +121,7 @@ def process_division(
         batting_war, data.guts, data.park_factors, team_batting_clutch, division, year
     )
     pitching_team = calculate_team_pitching(
-        pitching_war, data.park_factors, team_pitching_clutch, division, year
+        pitching_war, data.park_factors, data.guts, team_pitching_clutch, division, year
     )
 
     batting_war, pitching_war = normalize_division_war(

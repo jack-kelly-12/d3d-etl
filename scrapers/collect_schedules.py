@@ -5,7 +5,15 @@ from pathlib import Path
 import pandas as pd
 
 from .constants import BASE
-from .scraper_utils import ScraperConfig, ScraperSession
+from .scraper_utils import (
+    ScraperConfig,
+    ScraperSession,
+    cooldown_between_batches,
+    get_scraper_logger,
+    short_break_every,
+)
+
+logger = get_scraper_logger(__name__)
 
 
 def scrape_schedules(
@@ -14,19 +22,24 @@ def scrape_schedules(
     divisions,
     outdir,
     batch_size=10,
-    headless=True,
-    base_delay=2.0,
-    daily_budget=20000
+    base_delay=10.0,
+    rest_every=12,
+    batch_cooldown_s=90,
 ):
     teams = pd.read_csv(team_ids_file)
+
+    teams["year"] = pd.to_numeric(teams["year"], errors="coerce").astype("Int64")
+    teams["division"] = pd.to_numeric(teams["division"], errors="coerce").astype("Int64")
+    teams["team_id"] = pd.to_numeric(teams["team_id"], errors="coerce").astype("Int64")
+
+    teams = teams.dropna(subset=["year", "division", "team_id"])
+
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     config = ScraperConfig(
         base_delay=base_delay,
-        headless=headless,
         block_resources=True,
-        daily_request_budget=daily_budget,
     )
 
     with ScraperSession(config) as session:
@@ -37,25 +50,26 @@ def scrape_schedules(
 
             teams_div["team_id"] = teams_div["team_id"].astype(int)
             total_teams = len(teams_div)
-            print(f"\n=== {year} D{div} schedules — {total_teams} teams ===")
-            print(f"    (budget remaining: {session.requests_remaining} requests)")
+            logger.info(f"\n=== {year} D{div} schedules — {total_teams} teams ===")
+            logger.info(f"    (budget remaining: {session.requests_remaining} requests)")
 
             rows = []
 
             for start in range(0, total_teams, batch_size):
                 if session.requests_remaining <= 0:
-                    print("[budget] daily request budget exhausted, stopping")
+                    logger.info("[budget] daily request budget exhausted, stopping")
                     break
 
                 end = min(start + batch_size, total_teams)
                 batch = teams_div.iloc[start:end]
 
-                for _, row in batch.iterrows():
+                for i, row in enumerate(batch.itertuples(index=False), start=1):
                     if session.requests_remaining <= 0:
                         break
 
+                    short_break_every(rest_every, start + i, sleep_s=60.0)
                     team_id = row.team_id
-                    school = row.school_name
+                    school = row.team_name
                     conference = row.conference
                     url = f"{BASE}/teams/{team_id}"
 
@@ -66,7 +80,7 @@ def scrape_schedules(
                     )
 
                     if not html or status >= 400:
-                        print(f"failed {school} ({team_id}): HTTP {status}")
+                        logger.info(f"failed {school} ({team_id}): HTTP {status}")
                         continue
 
                     trs = session.page.query_selector_all("div.card-body table tbody tr")
@@ -126,9 +140,10 @@ def scrape_schedules(
                             "contest_id": contest_id
                         })
 
-                    print(f"success {school} ({team_id})")
+                    logger.info(f"success {school} ({team_id})")
 
-                print(f"batch {start+1}-{end} done (budget: {session.requests_remaining})")
+                logger.info(f"batch {start+1}-{end} done (budget: {session.requests_remaining})")
+                cooldown_between_batches(end, total_teams, float(batch_cooldown_s))
 
             if rows:
                 df = pd.DataFrame(rows).dropna(subset=['game_url'])
@@ -142,19 +157,19 @@ def scrape_schedules(
                 fname = f"d{div}_schedules_{year}.csv"
                 fpath = outdir / fname
                 df.to_csv(fpath, index=False)
-                print(f"saved {fpath} ({len(df)} rows) for division {div}")
+                logger.info(f"saved {fpath} ({len(df)} rows) for division {div}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--team_ids_file", default="../data/ncaa_team_history.csv")
-    parser.add_argument("--outdir", default="../data/schedules")
+    parser.add_argument("--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
+    parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
     parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--headless", action="store_true", default=True)
-    parser.add_argument("--base_delay", type=float, default=2.0)
-    parser.add_argument("--daily_budget", type=int, default=20000)
+    parser.add_argument("--base_delay", type=float, default=10.0)
+    parser.add_argument("--rest_every", type=int, default=12)
+    parser.add_argument("--batch_cooldown_s", type=int, default=90)
     args = parser.parse_args()
 
     scrape_schedules(
@@ -163,7 +178,7 @@ if __name__ == "__main__":
         divisions=args.divisions,
         outdir=args.outdir,
         batch_size=args.batch_size,
-        headless=args.headless,
         base_delay=args.base_delay,
-        daily_budget=args.daily_budget,
+        rest_every=args.rest_every,
+        batch_cooldown_s=args.batch_cooldown_s,
     )

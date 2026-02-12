@@ -3,7 +3,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from .constants import EventType, canon_pos
+from .constants import BattedBallType, EventType, canon_pos
 from .helpers import (
     bat_order_fill,
     bat_order_id,
@@ -562,18 +562,62 @@ def classify_event_type(df: pd.DataFrame) -> pd.Series:
     return pd.Series(result, index=df.index, dtype="int16")
 
 
+BATTED_BALL_EVENTS = {
+    EventType.SINGLE,
+    EventType.DOUBLE,
+    EventType.TRIPLE,
+    EventType.HOME_RUN,
+    EventType.GENERIC_OUT,
+    EventType.FIELDERS_CHOICE,
+    EventType.ERROR,
+}
+
+_RX_BBTYPE = [
+    (re.compile(r"\b(?:grounded|grounds|ground(?:ed)?\s+out|ground\s+ball)\b", re.I), BattedBallType.GROUND_BALL),
+    (re.compile(r"\b(?:bunt(?:ed)?|sacrifice\s+bunt)\b", re.I), BattedBallType.BUNT),
+    (re.compile(r"\b(?:lined|lines|lin(?:ed|es)\s+out|line\s+drive)\b", re.I), BattedBallType.LINE_DRIVE),
+    (re.compile(r"\b(?:popped|pops|pop(?:ped)?\s+(?:out|up)|pop\s+up|infield\s+fly)\b", re.I), BattedBallType.POP_UP),
+    (re.compile(r"\b(?:fouled\s+out|foul(?:ed|s)\s+out)\b", re.I), BattedBallType.POP_UP),
+    (re.compile(r"\b(?:flied|flies|fli(?:ed|es)\s+out|fly\s+(?:out|ball)|flyout|home run|homers|)\b", re.I), BattedBallType.FLY_BALL),
+    (re.compile(r"\b(?:sacrifice\s+fly)\b", re.I), BattedBallType.FLY_BALL),
+]
+
+
+def classify_batted_ball_type(df: pd.DataFrame) -> pd.Series:
+    text = df["play_description"].fillna("").astype(str)
+    event_type = df["event_type"] if "event_type" in df.columns else pd.Series(EventType.UNKNOWN, index=df.index)
+
+    def _classify(row_text: str, row_event: int) -> str | None:
+        if row_event not in BATTED_BALL_EVENTS:
+            return None
+
+        t = row_text.strip()
+        for rx, bb_type in _RX_BBTYPE:
+            if rx.search(t):
+                return bb_type.value
+        return None
+
+    result = [
+        _classify(t, e)
+        for t, e in zip(text, event_type, strict=True)
+    ]
+
+    return pd.Series(result, index=df.index, dtype="object")
+
+
 __all__ = [
-    "outs_on_play",
-    "metadata",
-    "outs_before",
-    "outs_after",
-    "score_before",
-    "score_after",
-    "runs_on_play",
-    "runs_this_inn",
-    "runs_rest_of_inn",
-    "flags",
     "bat_order",
-    "determine_batter_and_runners",
+    "classify_batted_ball_type",
     "classify_event_type",
+    "determine_batter_and_runners",
+    "flags",
+    "metadata",
+    "outs_after",
+    "outs_before",
+    "outs_on_play",
+    "runs_on_play",
+    "runs_rest_of_inn",
+    "runs_this_inn",
+    "score_after",
+    "score_before",
 ]

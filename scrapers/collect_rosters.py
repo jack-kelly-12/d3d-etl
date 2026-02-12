@@ -13,17 +13,22 @@ def scrape_rosters(
     divisions,
     outdir,
     batch_size=10,
-    headless=True,
     base_delay=2.0,
     daily_budget=20000
 ):
     teams = pd.read_csv(team_ids_file)
+
+    teams["year"] = pd.to_numeric(teams["year"], errors="coerce").astype("Int64")
+    teams["division"] = pd.to_numeric(teams["division"], errors="coerce").astype("Int64")
+    teams["team_id"] = pd.to_numeric(teams["team_id"], errors="coerce").astype("Int64")
+
+    teams = teams.dropna(subset=["year", "division", "team_id"])
+
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     config = ScraperConfig(
         base_delay=base_delay,
-        headless=headless,
         block_resources=True,
         daily_request_budget=daily_budget,
     )
@@ -47,7 +52,7 @@ def scrape_rosters(
                     break
 
                 team_id = row.team_id
-                school = row.school_name
+                school = row.team_name
                 conference = row.conference
 
                 url = f"{BASE}/teams/{team_id}/roster"
@@ -77,7 +82,7 @@ def scrape_rosters(
                         player_name = a.inner_text().strip()
                     rows.append({
                         "org_id": row.org_id,
-                        "school_name": school,
+                        "team_name": school,
                         "year": year,
                         "division": div,
                         "team_id": team_id,
@@ -106,15 +111,13 @@ def scrape_rosters(
                 df.to_csv(fpath, index=False)
                 print(f"saved {fpath} ({len(df)} rows)")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--team_ids_file", default="../data/ncaa_team_history.csv")
-    parser.add_argument("--outdir", default="../data/rosters")
+    parser.add_argument("--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
+    parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/rosters")
     parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--base_delay", type=float, default=2.0)
     parser.add_argument("--daily_budget", type=int, default=20000)
     args = parser.parse_args()
@@ -125,7 +128,6 @@ if __name__ == "__main__":
         divisions=args.divisions,
         outdir=args.outdir,
         batch_size=args.batch_size,
-        headless=args.headless,
         base_delay=args.base_delay,
         daily_budget=args.daily_budget,
     )

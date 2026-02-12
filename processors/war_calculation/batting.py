@@ -1,12 +1,14 @@
 import numpy as np
 import pandas as pd
-from war_calculator.common import aggregate_team, fill_missing, normalize_id_columns, safe_divide
-from war_calculator.constants import BATTING_SUM_COLS, batting_columns, position_adjustments
+
+from processors.pbp_parser.constants import BattedBallType, EventType
+
+from .common import aggregate_team, fill_missing, safe_divide
+from .constants import BATTING_SUM_COLS, batting_columns, position_adjustments
 
 
 def singles(h, doubles, triples, hr):
     return h - hr - triples - doubles
-
 
 def plate_appearances(ab, bb, ibb, hbp, sf):
     return ab + bb + ibb + hbp + sf
@@ -25,6 +27,10 @@ def on_base_pct(h, bb, hbp, ibb, ab, sf):
 
 def slugging_pct(tb, ab):
     return safe_divide(tb, ab)
+
+
+def ops(obp, slg):
+    return obp + slg
 
 
 def isolated_power(slg, ba):
@@ -58,11 +64,6 @@ def rc_per_pa(rc, pa):
 def ops_plus(obp, slg, lg_obp, lg_slg):
     return 100 * (safe_divide(obp, lg_obp) + safe_divide(slg, lg_slg) - 1)
 
-
-# =============================================================================
-# Linear Weights
-# =============================================================================
-
 def woba(bb, hbp, singles, doubles, triples, hr, ab, ibb, sf, weights):
     num = (
         weights['wbb'] * bb +
@@ -90,12 +91,19 @@ def wrc_plus(wraa_val, pa, lg_rpa, lg_wrcpa, pf):
     return safe_divide((wraa_pa + lg_rpa) + (lg_rpa - pf_adj * lg_rpa), lg_wrcpa) * 100
 
 
-def wsb(sb, cs, runs_out, lg_sb, lg_cs, lg_opps):
+def calc_wsb(bat_df: pd.DataFrame, runs_out: float) -> pd.Series:
     run_sb = 0.2
     run_cs = -(2 * runs_out + 0.075)
-    lg_wsb = safe_divide(lg_sb * run_sb + lg_cs * run_cs, lg_opps)
-    opps = sb + cs
-    return sb * run_sb + cs * run_cs - lg_wsb * opps
+
+    lg_sb = bat_df["sb"].sum()
+    lg_cs = bat_df["cs"].sum()
+    lg_opps = (bat_df["1b"].sum() + bat_df["bb"].sum() + bat_df["hbp"].sum() - bat_df["ibb"].sum())
+
+    lgwSB = safe_divide(lg_sb * run_sb + lg_cs * run_cs, lg_opps)
+
+    opps = (bat_df["1b"] + bat_df["bb"] + bat_df["hbp"] - bat_df["ibb"]).clip(lower=0)
+
+    return (bat_df["sb"] * run_sb) + (bat_df["cs"] * run_cs) - (lgwSB * opps)
 
 def batting_runs(wraa_val, pa, pf, lg_rpa, conf_rpa):
     pf_adj = pf / 100
@@ -173,6 +181,113 @@ def calculate_wgdp(pbp_df: pd.DataFrame) -> pd.DataFrame:
 
     return stats
 
+
+def calculate_bfh(pbp_df: pd.DataFrame) -> pd.DataFrame:
+    valid = pbp_df['batter_id'].notna() & (pbp_df['batter_id'] != '')
+    bunt_plays = pbp_df[valid].copy()
+
+    bunt_plays = bunt_plays[
+        (bunt_plays['batted_ball_type'] == BattedBallType.BUNT.value) &
+        (~bunt_plays['play_description'].str.contains('sacrifice', case=False, na=False))
+    ]
+
+    stats = pd.DataFrame({
+        'bfh': bunt_plays.groupby('batter_id').size()
+    }).fillna(0)
+
+    return stats
+
+
+def add_runner_dests_from_shift(pbp_df: pd.DataFrame) -> pd.DataFrame:
+    df = pbp_df.sort_values(["contest_id", "play_id"]).copy()
+
+    grp = df.groupby("contest_id", sort=False)
+    r1n = grp["r1_id"].shift(-1)
+    r2n = grp["r2_id"].shift(-1)
+    r3n = grp["r3_id"].shift(-1)
+
+    def dest(r, a, b, c):
+        if pd.isna(r):
+            return pd.NA
+        if r == a:
+            return 1
+        if r == b:
+            return 2
+        if r == c:
+            return 3
+        return 0
+
+    df["r1_dest"] = [dest(r, a, b, c) for r, a, b, c in zip(df["r1_id"], r1n, r2n, r3n, strict=True)]
+    df["r2_dest"] = [dest(r, a, b, c) for r, a, b, c in zip(df["r2_id"], r1n, r2n, r3n, strict=True)]
+    df["r3_dest"] = [dest(r, a, b, c) for r, a, b, c in zip(df["r3_id"], r1n, r2n, r3n, strict=True)]
+    return df
+
+
+def calculate_webt(pbp_df: pd.DataFrame, runs_out: float) -> pd.DataFrame:
+    df = add_runner_dests_from_shift(pbp_df)
+    event_type = pd.to_numeric(df["event_type"], errors='coerce')
+
+    c_13 = df["r1_id"].notna() & (event_type == EventType.SINGLE.value)
+    c_2h = df["r2_id"].notna() & (event_type == EventType.SINGLE.value)
+    c_1h = df["r1_id"].notna() & (event_type == EventType.DOUBLE.value)
+
+    s_13 = c_13 & (df["r1_dest"] == 3)
+    s_2h = c_2h & (df["r2_dest"] != 0)
+    s_1h = c_1h & (df["r1_dest"] != 0)
+
+    o_13 = c_13 & (df["r1_dest"] == 0)
+    o_2h = c_2h & (df["r2_dest"] == 0)
+    o_1h = c_1h & (df["r1_dest"] == 0)
+
+    def pack(mask, who, col):
+        t = df.loc[mask, [who]].rename(columns={who: "runner_id"})
+        t[col] = 1
+        return t
+
+    r = (
+        pd.concat(
+            [
+                pack(c_13, "r1_id", "opp_13"),
+                pack(s_13, "r1_id", "succ_13"),
+                pack(o_13, "r1_id", "out_13"),
+                pack(c_2h, "r2_id", "opp_2h"),
+                pack(s_2h, "r2_id", "succ_2h"),
+                pack(o_2h, "r2_id", "out_2h"),
+                pack(c_1h, "r1_id", "opp_1h"),
+                pack(s_1h, "r1_id", "succ_1h"),
+                pack(o_1h, "r1_id", "out_1h"),
+            ],
+            ignore_index=True,
+        )
+        .groupby("runner_id")
+        .sum(numeric_only=True)
+        .fillna(0.0)
+        .reset_index()
+    )
+
+    lg = r.sum(numeric_only=True)
+    lg_rates = {}
+    for t in ["13", "2h", "1h"]:
+        lg_opp = float(lg.get(f"opp_{t}", 0.0))
+        lg_succ = float(lg.get(f"succ_{t}", 0.0))
+        lg_out = float(lg.get(f"out_{t}", 0.0))
+        lg_rates[t] = {
+            "succ": 0.0 if lg_opp == 0 else lg_succ / lg_opp,
+            "out": 0.0 if lg_opp == 0 else lg_out / lg_opp,
+        }
+
+    webt = np.zeros(len(r), dtype=float)
+    for t in ["13", "2h", "1h"]:
+        opp = r[f"opp_{t}"].to_numpy()
+        succ = r[f"succ_{t}"].to_numpy()
+        outc = r[f"out_{t}"].to_numpy()
+        webt += (succ - lg_rates[t]["succ"] * opp) * 1.0 + (outc - lg_rates[t]["out"] * opp) * (-runs_out)
+
+    r["webt"] = webt
+    r["ebt_opps"] = r["opp_13"] + r["opp_2h"] + r["opp_1h"]
+    r["ebt"] = r["succ_13"] + r["succ_2h"] + r["succ_1h"]
+    return r[["runner_id", "webt", "ebt_opps", "ebt"]]
+
 def add_batting_stats(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -183,6 +298,7 @@ def add_batting_stats(df: pd.DataFrame) -> pd.DataFrame:
     df['ba'] = batting_average(df['h'], df['ab'])
     df['ob_pct'] = on_base_pct(df['h'], df['bb'], df['hbp'], df['ibb'], df['ab'], df['sf'])
     df['slg_pct'] = slugging_pct(df['tb'], df['ab'])
+    df['ops'] = ops(df['ob_pct'], df['slg_pct'])
     df['iso'] = isolated_power(df['slg_pct'], df['ba'])
     df['babip'] = babip(df['h'], df['hr'], df['ab'], df['k'], df['sf'])
     df['bb_pct'] = walk_pct(df['bb'], df['pa'])
@@ -221,10 +337,7 @@ def add_linear_weights(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
     df['wrc_plus'] = wrc_plus(df['wraa'], df['pa'], lg_rpa, lg_wrcpa, df['pf'])
 
     runs_out = weights['runs_out']
-    lg_sb = df['sb'].sum()
-    lg_cs = df['cs'].sum()
-    lg_opps = df['1b'].sum() + df['bb'].sum() + df['hbp'].sum() - df['ibb'].sum()
-    df['wsb'] = wsb(df['sb'], df['cs'], runs_out, lg_sb, lg_cs, lg_opps)
+    df['wsb'] = calc_wsb(df, runs_out)
 
     return df
 
@@ -241,12 +354,12 @@ def calculate_batting_war(
         return batting_df, pd.DataFrame()
 
     weights = guts_df.iloc[0]
-    df = normalize_id_columns(batting_df.copy())
+    df = batting_df.copy()
 
     if 'b_t' in df.columns:
         df[['bats', 'throws']] = df['b_t'].str.split('/', n=1, expand=True)
-        df['bats'] = df['bats'].fillna('-')
-        df['throws'] = df['throws'].fillna('-')
+        df['bats'] = df['bats']
+        df['throws'] = df['throws']
 
     df['pos'] = df['pos'].apply(lambda x: '' if pd.isna(x) else str(x).split('/')[0].upper())
     df = df[df['ab'] > 0].copy()
@@ -262,7 +375,16 @@ def calculate_batting_war(
     gdp_stats = calculate_wgdp(pbp_df)
     df = df.merge(gdp_stats, left_on='player_id', right_index=True, how='left')
     df = fill_missing(df, ['wgdp', 'gdp_opps', 'gdp'])
-    df['baserunning'] = df['wsb'] + df['wgdp']
+
+    bfh_stats = calculate_bfh(pbp_df)
+    df = df.merge(bfh_stats, left_on='player_id', right_index=True, how='left')
+    df = fill_missing(df, ['bfh'])
+
+    runs_out = weights['runs_out']
+    webt_stats = calculate_webt(pbp_df, runs_out).rename(columns={'runner_id': 'player_id'})
+    df = df.merge(webt_stats, on='player_id', how='left')
+    df = fill_missing(df, ['webt', 'ebt_opps', 'ebt'])
+    df['baserunning'] = df['wsb'] + df['wgdp'] + df['webt']
 
     player_clutch, team_clutch = get_batter_clutch_stats(pbp_df)
     df = df.merge(
@@ -296,6 +418,7 @@ def calculate_batting_war(
     df = df.fillna(0)
 
     output_cols = [c for c in batting_columns if c in df.columns and c != 'sos_adj_war']
+
     return df[output_cols].dropna(subset=['war']), team_clutch
 
 

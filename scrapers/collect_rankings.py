@@ -18,7 +18,6 @@ def scrape_massey_rankings(
     data_dir: str,
     years: list[int],
     divisions: list[int],
-    headless: bool = True,
     page_wait_s: float = 2.0,
     between_downloads_s: float = 4.0,
     max_retries: int = 3,
@@ -34,7 +33,6 @@ def scrape_massey_rankings(
 
     config = ScraperConfig(
         base_delay=base_delay,
-        headless=headless,
         block_resources=False,
         max_retries=max_retries,
         timeout_ms=timeout_ms,
@@ -46,10 +44,6 @@ def scrape_massey_rankings(
             for div in divisions:
                 url = build_url(year, div)
                 outpath = outdir / f"d{div}_rankings_{year}.csv"
-
-                if outpath.exists():
-                    print(f"skip exists {outpath}")
-                    continue
 
                 print(f"\n=== Massey export: year={year} div={div} ===")
                 print(f"goto {url}")
@@ -79,7 +73,7 @@ def scrape_massey_rankings(
 
                         df = pd.read_csv(tmp_path)
                         df = normalize_massey_rankings(df, division=div, year=year)
-                        
+
                         df.to_csv(outpath, index=False)
 
                         try:
@@ -174,7 +168,6 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", default="/Users/jackkelly/Desktop/d3d-etl/data")
     parser.add_argument("--years", nargs="+", default=["2021-2026"])
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--page_wait_s", type=float, default=2.0)
     parser.add_argument("--between_downloads_s", type=float, default=4.0)
     parser.add_argument("--max_retries", type=int, default=3)
@@ -188,7 +181,6 @@ if __name__ == "__main__":
         data_dir=args.data_dir,
         years=years,
         divisions=args.divisions,
-        headless=args.headless,
         page_wait_s=args.page_wait_s,
         between_downloads_s=args.between_downloads_s,
         max_retries=args.max_retries,

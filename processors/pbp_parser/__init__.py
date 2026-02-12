@@ -1,5 +1,6 @@
 from .columns import (
     bat_order,
+    classify_batted_ball_type,
     classify_event_type,
     determine_batter_and_runners,
     flags,
@@ -13,7 +14,7 @@ from .columns import (
     score_after,
     score_before,
 )
-from .constants import POS_MAP, EventType, canon_pos
+from .constants import POS_MAP, BattedBallType, EventType, canon_pos
 from .helpers import (
     bases_str,
     bat_order_fill,
@@ -63,7 +64,9 @@ __all__ = [
     "runs_rest_of_inn",
     "bat_order",
     "determine_batter_and_runners",
+    "classify_batted_ball_type",
     "classify_event_type",
+    "BattedBallType",
     "EventType",
     "RX_TP",
     "RX_DP",

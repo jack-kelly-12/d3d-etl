@@ -1,16 +1,6 @@
 import numpy as np
 import pandas as pd
 
-ID_COLUMNS = ['player_id', 'pitcher_id', 'batter_id', 'ncaa_id', 'team_id', 'org_id', 'contest_id']
-INVALID_IDS = {'0', '0.0', 'nan', 'None', '', '-'}
-
-
-def normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    for col in [c for c in ID_COLUMNS if c in df.columns]:
-        df[col] = df[col].astype(str).replace(INVALID_IDS, '-')
-    return df
-
 
 def safe_divide(num, denom, fill=0.0):
     return np.where(denom > 0, num / denom, fill)

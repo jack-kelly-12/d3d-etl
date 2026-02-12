@@ -1,4 +1,12 @@
-from enum import IntEnum
+from enum import IntEnum, StrEnum
+
+
+class BattedBallType(StrEnum):
+    GROUND_BALL = "GB"
+    LINE_DRIVE = "LD"
+    FLY_BALL = "FB"
+    POP_UP = "PU"
+    BUNT = "BU"
 
 
 class EventType(IntEnum):
@@ -53,4 +61,4 @@ def canon_pos(x: str) -> str:
     return POS_MAP.get(s, s)
 
 
-__all__ = ["POS_MAP", "canon_pos", "EventType"]
+__all__ = ["BattedBallType", "EventType", "POS_MAP", "canon_pos"]

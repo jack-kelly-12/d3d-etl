@@ -10,13 +10,13 @@ batting_columns = [
     'team_name', 'team_id', 'conference', 'gp', 'gs',
     'ab', 'pa', 'h', '1b', '2b', '3b', 'hr', 'r', 'rbi',
     'bb', 'ibb', 'hbp', 'k', 'sf', 'sac', 'sb', 'cs', 'picked',
-    'ba', 'ob_pct', 'slg_pct', 'iso', 'babip', 'ops_plus',
+    'ba', 'ob_pct', 'slg_pct', 'ops', 'iso', 'babip', 'ops_plus',
     'bb_pct', 'k_pct', 'bb_per_k', 'sb_pct', 'runs_created', 'rc_per_pa',
     'woba', 'wrc', 'wraa', 'wrc_plus', 'wsb',
-    'wgdp', 'gdp', 'gdp_opps',
+    'wgdp', 'gdp', 'gdp_opps', 'webt', 'ebt_opps', 'ebt',
     'baserunning', 'batting', 'adjustment', 'league_adjustment',
-    'rea', 'wpa', 'wpa_li', 'clutch',
-    'war', 'sos_adj_war'
+    'rea', 'wpa', 'wpa_li', 'clutch', 'sh', 'ht', 'pos',
+    'bfh', 'war', 'sos_adj_war'
 ]
 
 pitching_columns = [
@@ -24,9 +24,10 @@ pitching_columns = [
     'team_name', 'team_id', 'conference', 'app', 'gs', 'w', 'l', 'sv',
     'ip', 'ip_float', 'era', 'h', 'r', 'er', 'bb', 'so', 'hbp', 'bf',
     'hr_a', '2b_a', '3b_a', 'fo', 'go', 'pitches',
-    'inh_run', 'inh_run_score',
+    'inh_run', 'inh_run_score', 'ibb', 'ht', 'cg', 'sho', 'sfa', 'sha',
     'ra9', 'k9', 'bb9', 'h9', 'hr9', 'whip',
     'k_pct', 'bb_pct', 'k_minus_bb_pct', 'hr_div_fb', 'ir_a_pct',
+    'babip_against', 'ba_against', 'obp_against', 'slg_against', 'ops_against', 'woba_against',
     'fip', 'xfip', 'era_plus', 'gmli',
     'prea', 'pwpa', 'pwpa_li', 'clutch',
     'war', 'sos_adj_war'
@@ -35,17 +36,26 @@ pitching_columns = [
 BATTING_SUM_COLS = [
     'ab', 'pa', 'h', '1b', '2b', '3b', 'hr', 'r', 'rbi',
     'bb', 'ibb', 'hbp', 'k', 'sf', 'sac', 'sb', 'cs', 'picked',
-    'wrc', 'wsb', 'wgdp', 'gdp', 'gdp_opps',
+    'wrc', 'wsb', 'wgdp', 'gdp', 'gdp_opps', 'webt', 'ebt_opps', 'ebt',
     'baserunning', 'batting', 'adjustment',
-    'war', 'sos_adj_war'
+    'war', 'sos_adj_war', 'sh', 'bfh'
 ]
 
 PITCHING_SUM_COLS = [
     'app', 'gs', 'w', 'l', 'sv',
-    'ip_float', 'h', 'r', 'er', 'bb', 'so', 'hbp', 'bf',
+    'ip_float', 'h', 'r', 'er', 'bb', 'ibb', 'so', 'hbp', 'bf', 'sfa',
     'hr_a', '2b_a', '3b_a', 'fo', 'go', 'pitches',
     'inh_run', 'inh_run_score',
-    'war', 'sos_adj_war'
+    'war', 'sos_adj_war', 'cg', 'sho', 'sha', 'sfa'
 ]
+
+BAT_STAT_COLUMNS = ['gp', 'gs', 'r', 'ab', 'h', '2b', '3b', 'tb',
+                    'hr', 'rbi', 'bb', 'hbp', 'sf', 'sh', 'k',
+                    'opp_dp', 'cs', 'picked', 'sb', 'ibb', 'rbi2out',]
+
+PITCH_STAT_COLUMNS = ['app', 'g', 'gs', 'era', 'ip', 'cg', 'h',
+    'r', 'er', 'bb', 'so', 'sho', 'bf', 'p_oab', '2b_a', '3b_a', 'bk',
+    'hr_a', 'wp', 'hbp', 'ibb', 'inh_run', 'inh_run_score', 'sha', 'sfa',
+    'pitches', 'go', 'fo', 'w', 'l', 'sv', 'kl', 'pickoffs',]
 
 REP_WP = 0.294

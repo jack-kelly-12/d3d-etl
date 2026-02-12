@@ -41,7 +41,6 @@ def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
         (f"{base}/sports/bsb/{presto_season_slug(season)}/roster", "presto"),
     ]
 
-
 def detect_cms(html: str) -> str | None:
     h = (html or "").lower()
     if "presto-sport-static" in h or "theme-assets.prestosports.com" in h:
@@ -344,8 +343,8 @@ async def scrape_team(browser, base: str, team_name: str, season: int, config: S
             print(f"  {team_name}: trying {hint}")
             html, status = await fetch_html(page, url, config)
             if not html or status >= 400:
-                print(f"    {team_name}: HTTP {status} on {hint}")
-                continue
+                    print(f"    {team_name}: HTTP {status} on {hint}")
+                    continue
 
             cms = detect_cms(html) or hint
             if cms == "sidearm":
@@ -363,7 +362,7 @@ async def scrape_team(browser, base: str, team_name: str, season: int, config: S
             else:
                 print(f"    {team_name}: no players parsed on {hint}")
 
-        print(f"    {team_name}: no working roster URL")
+            print(f"{team_name}: no working roster URL")
         return []
     finally:
         await page.close()
@@ -413,13 +412,12 @@ async def main(
 
     config = ScraperConfig(
         base_delay=base_delay,
-        headless=True,
         block_resources=True,
     )
 
     all_players = []
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=config.headless)
+        browser = await p.chromium.launch()
 
         for i in range(0, len(filtered), batch_size):
             batch = filtered[i:i + batch_size]

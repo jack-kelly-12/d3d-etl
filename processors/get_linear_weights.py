@@ -2,7 +2,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pbp_parser.constants import EventType
+
+from processors.pbp_parser.constants import EventType
 
 
 def calculate_linear_weights(pbp_data: pd.DataFrame, re24_matrix: pd.DataFrame) -> pd.DataFrame:

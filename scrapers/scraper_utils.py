@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import random
 import time
 from dataclasses import dataclass
@@ -7,6 +8,21 @@ from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, Route, sync_playwright
+
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(filename)s | %(message)s"
+
+def get_scraper_logger(name: str) -> logging.Logger:
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+    return logging.getLogger(name)
+
+
+logger = get_scraper_logger(__name__)
+
+
+class HardBlockError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -44,7 +60,7 @@ class RateLimiter:
         now = time.time()
         if self._pause_until and now < self._pause_until:
             sleep_time = self._pause_until - now
-            print(f"  [rate-limit] paused, sleeping {sleep_time:.1f}s")
+            logger.info(f"  [rate-limit] paused, sleeping {sleep_time:.1f}s")
             time.sleep(sleep_time)
             self._pause_until = None
 
@@ -65,13 +81,13 @@ class RateLimiter:
         if status_code in (403, 429):
             pause_seconds = random.uniform(120, 600)
             self._pause_until = time.time() + pause_seconds
-            print(f"  [rate-limit] got {status_code}, pausing for {pause_seconds:.0f}s")
+            logger.info(f"  [rate-limit] got {status_code}, pausing for {pause_seconds:.0f}s")
         elif status_code >= 500:
             backoff = min(
                 self.backoff_base * (2 ** (self._consecutive_errors - 1)),
                 self.max_backoff
             )
-            print(f"  [rate-limit] got {status_code}, backing off {backoff:.1f}s")
+            logger.info(f"  [rate-limit] got {status_code}, backing off {backoff:.1f}s")
             time.sleep(backoff)
 
 
@@ -142,7 +158,7 @@ class RequestCache:
         return self._metadata.get(self._cache_key(contest_id, page_type))
 
 
-BLOCKED_RESOURCE_TYPES = {"image", "font", "stylesheet", "media", "other"}
+BLOCKED_RESOURCE_TYPES = {"image", "font", "stylesheet", "media"}
 
 
 def block_resources(route: Route):
@@ -178,7 +194,6 @@ class ScraperConfig:
     block_resources: bool = False
     cache_html: bool = False
     cache_dir: Path | None = None
-    daily_request_budget: int = 20000
     concurrency: int = 1
     accept_downloads: bool = False
 
@@ -199,10 +214,13 @@ class ScraperSession:
         self._browser = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._hard_blocked = False
 
     @property
-    def requests_remaining(self) -> int:
-        return self.config.daily_request_budget - self._request_count
+    def hard_blocked(self) -> bool:
+        return self._hard_blocked
+
+
 
     def __enter__(self):
         self._playwright = sync_playwright().start()
@@ -253,9 +271,8 @@ class ScraperSession:
         wait_selector: str | None = None,
         wait_timeout: int | None = None,
     ) -> tuple[str | None, int]:
-        if self._request_count >= self.config.daily_request_budget:
-            print(f"[scraper] daily budget exhausted ({self.config.daily_request_budget} requests)")
-            return None, 0
+        if self._hard_blocked:
+            raise HardBlockError("Hard block already detected (HTTP 403). Stopping scraper.")
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -267,11 +284,10 @@ class ScraperSession:
                 response = self.page.goto(url, timeout=self.config.timeout_ms, wait_until="domcontentloaded")
                 status = response.status if response else 0
 
-                if status >= 400:
+                if status in (403,):
+                    self._hard_blocked = True
                     self.rate_limiter.on_error(status)
-                    if attempt < self.config.max_retries:
-                        continue
-                    return None, status
+                    raise HardBlockError("Hard block detected (HTTP 403). Stopping scraper.")
 
                 if wait_selector:
                     try:
@@ -284,7 +300,7 @@ class ScraperSession:
                 return html, status
 
             except Exception as e:
-                print(f"  [fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
+                logger.info(f"  [fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:
                     time.sleep(2 ** (attempt - 1))
                 else:
@@ -296,9 +312,8 @@ class ScraperSession:
         self,
         url: str,
     ) -> tuple[str | None, int]:
-        if self._request_count >= self.config.daily_request_budget:
-            print(f"[scraper] daily budget exhausted ({self.config.daily_request_budget} requests)")
-            return None, 0
+        if self._hard_blocked:
+            raise HardBlockError("Hard block already detected (HTTP 403). Stopping scraper.")
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -315,6 +330,11 @@ class ScraperSession:
                 )
                 status = response.status
 
+                if status == 403:
+                    self._hard_blocked = True
+                    self.rate_limiter.on_error(status)
+                    raise HardBlockError("Hard block detected (HTTP 403). Stopping scraper.")
+
                 if status >= 400:
                     self.rate_limiter.on_error(status)
                     if attempt < self.config.max_retries:
@@ -325,7 +345,7 @@ class ScraperSession:
                 return response.text(), status
 
             except Exception as e:
-                print(f"  [api-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
+                logger.info(f"  [api-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:
                     time.sleep(2 ** (attempt - 1))
                 else:
@@ -343,10 +363,11 @@ class AsyncScraperSession:
         )
         self._request_count = 0
         self._browser = None
+        self._hard_blocked = False
 
     @property
-    def requests_remaining(self) -> int:
-        return self.config.daily_request_budget - self._request_count
+    def hard_blocked(self) -> bool:
+        return self._hard_blocked
 
     async def start(self, playwright):
         self._browser = await playwright.chromium.launch(headless=self.config.headless)
@@ -378,8 +399,8 @@ class AsyncScraperSession:
         wait_selector: str | None = None,
         wait_timeout: int | None = None,
     ) -> tuple[str | None, int]:
-        if self._request_count >= self.config.daily_request_budget:
-            return None, 0
+        if self._hard_blocked:
+            raise HardBlockError("Hard block already detected (HTTP 403). Stopping scraper.")
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -390,6 +411,11 @@ class AsyncScraperSession:
             try:
                 response = await page.goto(url, timeout=self.config.timeout_ms, wait_until="domcontentloaded")
                 status = response.status if response else 0
+
+                if status == 403:
+                    self._hard_blocked = True
+                    self.rate_limiter.on_error(status)
+                    raise HardBlockError("Hard block detected (HTTP 403). Stopping scraper.")
 
                 if status >= 400:
                     self.rate_limiter.on_error(status)
@@ -408,7 +434,7 @@ class AsyncScraperSession:
                 return html, status
 
             except Exception as e:
-                print(f"  [async-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
+                logger.info(f"  [async-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:
                     import asyncio
                     await asyncio.sleep(2 ** (attempt - 1))
@@ -430,3 +456,17 @@ def get_completed_contest_ids(outdir: Path, div: int, year: int, filename_patter
     except Exception:
         pass
     return set()
+
+
+def short_break_every(n: int, idx: int, sleep_s: float = 60.0) -> None:
+    if n > 0 and idx > 0 and idx % n == 0:
+        time.sleep(sleep_s)
+
+
+def cooldown_between_batches(batch_end: int, total: int, cooldown_s: float) -> None:
+    if cooldown_s > 0 and batch_end < total:
+        time.sleep(cooldown_s)
+
+
+def retry_backoff_sleep(attempt: int, cap_s: float = 10.0) -> None:
+    time.sleep(min(cap_s, 2.0 ** (attempt - 1) + 1.0))

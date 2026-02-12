@@ -5,6 +5,7 @@ import pandas as pd
 
 from .columns import (
     bat_order,
+    classify_batted_ball_type,
     classify_event_type,
     determine_batter_and_runners,
     flags,
@@ -61,12 +62,23 @@ def parse_pbp_base_state(df: pd.DataFrame) -> pd.DataFrame:
     df = determine_batter_and_runners(df)
     df["bat_order"] = bat_order(df)
     df["event_type"] = classify_event_type(df)
+    df["batted_ball_type"] = classify_batted_ball_type(df)
 
     return df
 
 def add_team_names(pbp: pd.DataFrame, team_history: pd.DataFrame, year: int) -> pd.DataFrame:
     team_lookup = team_history[team_history['year'] == year][['team_id', 'team_name']].drop_duplicates()
     team_lookup['team_id'] = team_lookup['team_id'].astype('Int64')
+
+    existing_away_team_name = pbp.get('away_team_name')
+    existing_home_team_name = pbp.get('home_team_name')
+    existing_bat_team_name = pbp.get('bat_team_name')
+    existing_pitch_team_name = pbp.get('pitch_team_name')
+
+    if existing_away_team_name is not None:
+        pbp = pbp.rename(columns={'away_team_name': '_away_team_name_orig'})
+    if existing_home_team_name is not None:
+        pbp = pbp.rename(columns={'home_team_name': '_home_team_name_orig'})
 
     pbp = pbp.merge(
         team_lookup.rename(columns={'team_id': 'away_team_id', 'team_name': 'away_team_name'}),
@@ -79,10 +91,26 @@ def add_team_names(pbp: pd.DataFrame, team_history: pd.DataFrame, year: int) -> 
         how='left'
     )
 
+    if existing_away_team_name is not None:
+        pbp['away_team_name'] = pbp['away_team_name'].fillna(pbp['_away_team_name_orig'])
+        pbp = pbp.drop(columns=['_away_team_name_orig'])
+    if existing_home_team_name is not None:
+        pbp['home_team_name'] = pbp['home_team_name'].fillna(pbp['_home_team_name_orig'])
+        pbp = pbp.drop(columns=['_home_team_name_orig'])
+
     pbp['bat_team_id'] = np.where(pbp['half'] == 'Top', pbp['away_team_id'], pbp['home_team_id'])
     pbp['pitch_team_id'] = np.where(pbp['half'] == 'Top', pbp['home_team_id'], pbp['away_team_id'])
-    pbp['bat_team_name'] = np.where(pbp['half'] == 'Top', pbp['away_team_name'], pbp['home_team_name'])
-    pbp['pitch_team_name'] = np.where(pbp['half'] == 'Top', pbp['home_team_name'], pbp['away_team_name'])
+
+    bat_team_name_new = np.where(pbp['half'] == 'Top', pbp['away_team_name'], pbp['home_team_name'])
+    pitch_team_name_new = np.where(pbp['half'] == 'Top', pbp['home_team_name'], pbp['away_team_name'])
+
+    pbp['bat_team_name'] = bat_team_name_new
+    pbp['pitch_team_name'] = pitch_team_name_new
+
+    if existing_bat_team_name is not None:
+        pbp['bat_team_name'] = pbp['bat_team_name'].fillna(existing_bat_team_name)
+    if existing_pitch_team_name is not None:
+        pbp['pitch_team_name'] = pbp['pitch_team_name'].fillna(existing_pitch_team_name)
 
     pbp['bat_team_id'] = pbp['bat_team_id'].astype('Int64')
     pbp['pitch_team_id'] = pbp['pitch_team_id'].astype('Int64')

@@ -1,14 +1,14 @@
 import numpy as np
 import pandas as pd
-from war_calculator.common import (
+
+from .common import (
     aggregate_team,
     fill_missing,
     float_to_ip,
     ip_to_float,
-    normalize_id_columns,
     safe_divide,
 )
-from war_calculator.constants import PITCHING_SUM_COLS, pitching_columns
+from .constants import PITCHING_SUM_COLS, pitching_columns
 
 # =============================================================================
 # Rate Stats (per 9 innings)
@@ -78,9 +78,40 @@ def xfip(fo, hr, bb, hbp, so, ip, constant, lg_hr_fb_rate):
 def era_plus(player_era, lg_era, pf):
     return 100 * (2 - (player_era / lg_era) * (100 / pf))
 
+
+def pitching_babip(h, hr, ab, k, sfa):
+    return safe_divide(h - hr, ab - hr - k + sfa)
+
+
+def pitching_ba(h, ab):
+    return safe_divide(h, ab)
+
+
+def pitching_obp(h, bb, hbp, ab, sfa):
+    return safe_divide(h + bb + hbp, ab + bb + hbp + sfa)
+
+
+def pitching_slg(h, doubles, triples, hr, ab):
+    singles = h - doubles - triples - hr
+    tb = singles + 2 * doubles + 3 * triples + 4 * hr
+    return safe_divide(tb, ab)
+
+
+def pitching_woba(bb, hbp, h, doubles, triples, hr, ab, ibb, sfa, weights):
+    singles = h - doubles - triples - hr
+    num = (
+        weights['wbb'] * bb +
+        weights['whbp'] * hbp +
+        weights['w1b'] * singles +
+        weights['w2b'] * doubles +
+        weights['w3b'] * triples +
+        weights['whr'] * hr
+    )
+    denom = ab + bb - ibb + sfa + hbp
+    return safe_divide(num, denom)
+
 def dynamic_rpw(ip_per_game, conf_fipr9, pfipr9):
     return (((18 - ip_per_game) * conf_fipr9 + ip_per_game * pfipr9) / 18 + 2) * 1.5
-
 
 def replacement_level(gs, app):
     gs_rate = safe_divide(gs, app)
@@ -128,17 +159,26 @@ def get_pitcher_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Dat
 
 
 def calculate_gmli(pbp_df: pd.DataFrame) -> pd.DataFrame:
+    df = pbp_df[pbp_df['pitcher_id'].notna()].copy()
+
+    df = df.sort_values(['pitcher_id', 'contest_id', 'play_id'])
+    df['li'] = df.groupby(['pitcher_id', 'contest_id'])['li'].shift(-1)
     first_app = (
-        pbp_df.sort_values(['pitcher_id', 'contest_id', 'play_id'])
-        .groupby(['pitcher_id', 'contest_id'])
+        df.groupby(['pitcher_id', 'contest_id'])
         .first()
         .reset_index()
     )
-    relievers = first_app[first_app['inning'] != 1]
-    return relievers.groupby('pitcher_id').agg({'li': 'mean'}).reset_index().rename(columns={'li': 'gmli'})
+    relievers = first_app[first_app['inning'] > 1]
+    if relievers.empty:
+        return pd.DataFrame(columns=['pitcher_id', 'gmli'])
+
+    result = relievers.groupby('pitcher_id').agg({'li': 'mean'}).reset_index()
+    result = result.rename(columns={'li': 'gmli'})
+
+    return result
 
 
-def add_pitching_stats(df: pd.DataFrame) -> pd.DataFrame:
+def add_pitching_stats(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
     df = df.copy()
     ip = df['ip_float']
 
@@ -155,6 +195,18 @@ def add_pitching_stats(df: pd.DataFrame) -> pd.DataFrame:
     df['hr_div_fb'] = hr_per_fb(df['hr_a'], df['fo'])
     df['ir_a_pct'] = inherited_runners_scored_pct(df['inh_run_score'], df['inh_run'])
 
+    sfa = df['sfa'].fillna(0) if 'sfa' in df.columns else 0
+    ibb = df['ibb'].fillna(0) if 'ibb' in df.columns else 0
+    ab = df['bf'] - df['bb'] - df['hbp'] - sfa
+    df['ba_against'] = pitching_ba(df['h'], ab)
+    df['obp_against'] = pitching_obp(df['h'], df['bb'], df['hbp'], ab, sfa)
+    df['slg_against'] = pitching_slg(df['h'], df['2b_a'], df['3b_a'], df['hr_a'], ab)
+    df['ops_against'] = df['obp_against'] + df['slg_against']
+    df['babip_against'] = pitching_babip(df['h'], df['hr_a'], ab, df['so'], sfa)
+
+    df['woba_against'] = pitching_woba(
+        df['bb'], df['hbp'], df['h'], df['2b_a'], df['3b_a'], df['hr_a'], ab, ibb, sfa, weights)
+
     return df
 
 
@@ -165,7 +217,7 @@ def add_fip_stats(df: pd.DataFrame, valid_mask: pd.Series) -> pd.DataFrame:
     if ip_sum == 0:
         df['fip'] = np.nan
         df['xfip'] = np.nan
-        df['era+'] = np.nan
+        df['era_plus'] = np.nan
         return df
 
     lg_era_val = era(df.loc[valid_mask, 'er'].sum(), ip_sum)
@@ -179,8 +231,8 @@ def add_fip_stats(df: pd.DataFrame, valid_mask: pd.Series) -> pd.DataFrame:
     lg_hr_fb = safe_divide(df['hr_a'].sum(), df['hr_a'].sum() + df['fo'].sum(), fill=0.10)
     df['xfip'] = xfip(df['fo'], df['hr_a'], df['bb'], df['hbp'], df['so'], df['ip_float'], constant, lg_hr_fb)
 
-    df['era+'] = np.nan
-    df.loc[valid_mask, 'era+'] = era_plus(df.loc[valid_mask, 'era'], lg_era_val, df.loc[valid_mask, 'pf'])
+    df['era_plus'] = np.nan
+    df.loc[valid_mask, 'era_plus'] = era_plus(df.loc[valid_mask, 'era'], lg_era_val, df.loc[valid_mask, 'pf'])
 
     return df
 
@@ -189,6 +241,7 @@ def calculate_pitching_war(
     pitching_df: pd.DataFrame,
     pbp_df: pd.DataFrame,
     park_factors_df: pd.DataFrame,
+    guts_df: pd.DataFrame,
     bat_war_total: float,
     year: int,
     division: int
@@ -196,7 +249,8 @@ def calculate_pitching_war(
     if pitching_df.empty:
         return pitching_df, pd.DataFrame()
 
-    df = normalize_id_columns(pitching_df.copy())
+    weights = guts_df.iloc[0] if not guts_df.empty else None
+    df = pitching_df.copy()
 
     if 'b_t' in df.columns:
         df[['bats', 'throws']] = df['b_t'].str.split('/', n=1, expand=True)
@@ -210,12 +264,13 @@ def calculate_pitching_war(
     pf_map = park_factors_df.set_index('team_name')['pf'].to_dict()
     df['pf'] = df['team_name'].map(pf_map).fillna(100)
 
-    df = add_pitching_stats(df)
+    df = add_pitching_stats(df, weights)
     df = add_fip_stats(df, valid_mask)
 
     gmli_df = calculate_gmli(pbp_df)
-    df = df.merge(gmli_df, left_on='player_id', right_on='pitcher_id', how='left')
+    df = df.merge(gmli_df, left_on='player_id', right_on='pitcher_id', how='left', suffixes=('', '_gmli'))
     df['gmli'] = df['gmli'].fillna(0)
+    df = df.drop(columns=[c for c in df.columns if c.endswith('_gmli')])
 
     valid_mask = df['ip_float'] > 0
     valid_df = df[valid_mask]
@@ -281,6 +336,7 @@ def calculate_pitching_war(
 def calculate_team_pitching(
     player_df: pd.DataFrame,
     park_factors_df: pd.DataFrame,
+    guts_df: pd.DataFrame,
     team_clutch: pd.DataFrame,
     division: int,
     year: int
@@ -288,6 +344,7 @@ def calculate_team_pitching(
     if player_df.empty:
         return pd.DataFrame()
 
+    weights = guts_df.iloc[0] if not guts_df.empty else None
     team_df = aggregate_team(player_df, PITCHING_SUM_COLS)
     team_df = fill_missing(team_df, PITCHING_SUM_COLS)
 
@@ -298,7 +355,7 @@ def calculate_team_pitching(
 
     valid = team_df['ip_float'] > 0
     team_df['era'] = np.where(valid, era(team_df['er'], team_df['ip_float']), 0)
-    team_df = add_pitching_stats(team_df)
+    team_df = add_pitching_stats(team_df, weights)
     team_df = add_fip_stats(team_df, valid)
 
     team_df['team_id'] = pd.to_numeric(team_df['team_id'], errors='coerce').astype('Int64')
