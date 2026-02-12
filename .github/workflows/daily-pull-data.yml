@@ -233,7 +233,7 @@ jobs:
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
           xvfb-run -a python -m scrapers.collect_rankings \
-            --data_dir "$RANKINGS_OUTDIR" \
+            --outdir "$RANKINGS_OUTDIR" \
             --years "${YEARS_ARR[@]}" \
             --divisions "${DIVS_ARR[@]}" \
             --base_delay "$BASE_DELAY"

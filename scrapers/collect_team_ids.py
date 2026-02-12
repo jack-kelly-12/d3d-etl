@@ -5,6 +5,7 @@ import pandas as pd
 
 from .constants import BASE
 from .scraper_utils import (
+    HardBlockError,
     ScraperConfig,
     ScraperSession,
     cooldown_between_batches,
@@ -33,7 +34,12 @@ def scrape_team_history(
     )
 
     with ScraperSession(config) as session:
-        html, status = session.fetch(START_URL, wait_selector="#org_id_select", wait_timeout=60000)
+        try:
+            html, status = session.fetch(START_URL, wait_selector="#org_id_select", wait_timeout=60000)
+        except HardBlockError as exc:
+            logger.error(str(exc))
+            logger.info("[STOP] hard block detected before start page. Exiting.")
+            return
         if not html or status >= 400:
             logger.info(f"failed to load start page: HTTP {status}")
             return
@@ -50,60 +56,64 @@ def scrape_team_history(
         logger.info(f"Found {len(orgs)} orgs (budget: {session.requests_remaining})")
 
         rows = []
-        for i, org in enumerate(orgs, 1):
-            if session.requests_remaining <= 0:
-                logger.info("[budget] daily request budget exhausted, stopping")
-                break
+        try:
+            for i, org in enumerate(orgs, 1):
+                if session.requests_remaining <= 0:
+                    logger.info("[budget] daily request budget exhausted, stopping")
+                    break
 
-            short_break_every(rest_every, i, sleep_s=60.0)
-            url = f"{BASE}/teams/history?org_id={org['org_id']}&sport_code=MBA"
-            html, status = session.fetch(url, wait_selector="#team_history_data_table tbody tr", wait_timeout=15000)
+                short_break_every(rest_every, i, sleep_s=60.0)
+                url = f"{BASE}/teams/history?org_id={org['org_id']}&sport_code=MBA"
+                html, status = session.fetch(url, wait_selector="#team_history_data_table tbody tr", wait_timeout=15000)
 
-            if not html or status >= 400:
-                logger.info(f"failed {org['team_name']} ({org['org_id']}): HTTP {status}")
-                continue
-
-            trs = session.page.query_selector_all("#team_history_data_table tbody tr")
-
-            for tr in trs:
-                tds = [c.inner_text().strip() for c in tr.query_selector_all("td")]
-                if not tds or "No data available" in tds[0]:
+                if not html or status >= 400:
+                    logger.info(f"failed {org['team_name']} ({org['org_id']}): HTTP {status}")
                     continue
 
-                season = tds[0]
-                try:
-                    season_year = int(season.split("-")[0])
-                except ValueError:
-                    continue
+                trs = session.page.query_selector_all("#team_history_data_table tbody tr")
 
-                if season_year < 2020:
-                    continue
+                for tr in trs:
+                    tds = [c.inner_text().strip() for c in tr.query_selector_all("td")]
+                    if not tds or "No data available" in tds[0]:
+                        continue
 
-                year = int(season.split("-")[1]) + 2000
+                    season = tds[0]
+                    try:
+                        season_year = int(season.split("-")[0])
+                    except ValueError:
+                        continue
 
-                div_str = tds[2]
-                div_map = {"D-I": 1, "D-II": 2, "D-III": 3}
-                division = div_map.get(div_str, "-")
+                    if season_year < 2020:
+                        continue
 
-                link = tr.query_selector("td a[href^='/teams/']")
-                team_id = int(link.get_attribute("href").split("/")[2]) if link else None
+                    year = int(season.split("-")[1]) + 2000
 
-                rows.append({
-                    "org_id": org["org_id"],
-                    "team_name": org["team_name"],
-                    "year": year,
-                    "division": division,
-                    "conference": tds[3],
-                    "coach": tds[1],
-                    "coach_id": None,
-                    "team_id": team_id
-                })
+                    div_str = tds[2]
+                    div_map = {"D-I": 1, "D-II": 2, "D-III": 3}
+                    division = div_map.get(div_str, "-")
 
-            logger.info(f"success {org['team_name']} ({org['org_id']})")
+                    link = tr.query_selector("td a[href^='/teams/']")
+                    team_id = int(link.get_attribute("href").split("/")[2]) if link else None
 
-            if i % batch_size == 0:
-                logger.info(f"Processed {i}/{len(orgs)} schools... (budget: {session.requests_remaining})")
-                cooldown_between_batches(i, len(orgs), float(batch_cooldown_s))
+                    rows.append({
+                        "org_id": org["org_id"],
+                        "team_name": org["team_name"],
+                        "year": year,
+                        "division": division,
+                        "conference": tds[3],
+                        "coach": tds[1],
+                        "coach_id": None,
+                        "team_id": team_id
+                    })
+
+                logger.info(f"success {org['team_name']} ({org['org_id']})")
+
+                if i % batch_size == 0:
+                    logger.info(f"Processed {i}/{len(orgs)} schools... (budget: {session.requests_remaining})")
+                    cooldown_between_batches(i, len(orgs), float(batch_cooldown_s))
+        except HardBlockError as exc:
+            logger.error(str(exc))
+            logger.info("[STOP] hard block detected. Saving collected team history rows and exiting.")
 
         df = pd.DataFrame(rows)
         fpath = outdir / "ncaa_team_history.csv"

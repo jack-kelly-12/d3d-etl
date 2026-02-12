@@ -299,6 +299,8 @@ class ScraperSession:
                 html = self.page.content()
                 return html, status
 
+            except HardBlockError:
+                raise
             except Exception as e:
                 logger.info(f"  [fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:
@@ -344,6 +346,8 @@ class ScraperSession:
                 self.rate_limiter.on_success()
                 return response.text(), status
 
+            except HardBlockError:
+                raise
             except Exception as e:
                 logger.info(f"  [api-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:
@@ -433,6 +437,8 @@ class AsyncScraperSession:
                 html = await page.content()
                 return html, status
 
+            except HardBlockError:
+                raise
             except Exception as e:
                 logger.info(f"  [async-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:

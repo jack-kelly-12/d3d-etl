@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from .scraper_utils import ScraperConfig, ScraperSession
+from .scraper_utils import HardBlockError, ScraperConfig, ScraperSession
 
 BASE = "https://masseyratings.com"
 
@@ -15,17 +15,22 @@ def build_url(year: int, division: int) -> str:
 
 
 def scrape_massey_rankings(
-    data_dir: str,
+    data_dir: str | None,
     years: list[int],
     divisions: list[int],
+    outdir: str | None = None,
     page_wait_s: float = 2.0,
     between_downloads_s: float = 4.0,
     max_retries: int = 3,
     timeout_ms: int = 45000,
     base_delay: float = 3.0,
 ):
-    data_dir = Path(data_dir)
-    outdir = data_dir / "rankings"
+    if outdir:
+        outdir = Path(outdir)
+    elif data_dir:
+        outdir = Path(data_dir) / "rankings"
+    else:
+        raise ValueError("Either data_dir or outdir must be provided.")
     outdir.mkdir(parents=True, exist_ok=True)
 
     years = sorted({int(y) for y in years})
@@ -87,6 +92,9 @@ def scrape_massey_rankings(
                         time.sleep(between_downloads_s)
                         break
 
+                    except HardBlockError:
+                        print("[STOP] got 403 (hard block). Stopping scraper to preserve progress.")
+                        return
                     except (PlaywrightTimeoutError, Exception) as e:
                         print(f"attempt {attempt}/{max_retries} failed: {type(e).__name__}: {e}")
                         time.sleep(min(10.0, 2.0 ** (attempt - 1) + 1.0))
@@ -166,10 +174,11 @@ def normalize_massey_rankings(df: pd.DataFrame, division: int, year: int) -> pd.
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="/Users/jackkelly/Desktop/d3d-etl/data")
-    parser.add_argument("--years", nargs="+", default=["2021-2026"])
-    parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--page_wait_s", type=float, default=2.0)
-    parser.add_argument("--between_downloads_s", type=float, default=4.0)
+    parser.add_argument("--outdir", required=True)
+    parser.add_argument("--years", nargs="+", required=True)
+    parser.add_argument("--divisions", nargs="+", type=int, required=True)
+    parser.add_argument("--page_wait_s", type=float, default=20.0)
+    parser.add_argument("--between_downloads_s", type=float, default=30.0)
     parser.add_argument("--max_retries", type=int, default=3)
     parser.add_argument("--timeout_ms", type=int, default=45000)
     parser.add_argument("--base_delay", type=float, default=3.0)
@@ -181,6 +190,7 @@ if __name__ == "__main__":
         data_dir=args.data_dir,
         years=years,
         divisions=args.divisions,
+        outdir=args.outdir,
         page_wait_s=args.page_wait_s,
         between_downloads_s=args.between_downloads_s,
         max_retries=args.max_retries,

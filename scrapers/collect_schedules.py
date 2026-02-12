@@ -6,6 +6,7 @@ import pandas as pd
 
 from .constants import BASE
 from .scraper_utils import (
+    HardBlockError,
     ScraperConfig,
     ScraperSession,
     cooldown_between_batches,
@@ -54,96 +55,99 @@ def scrape_schedules(
             logger.info(f"    (budget remaining: {session.requests_remaining} requests)")
 
             rows = []
-
-            for start in range(0, total_teams, batch_size):
-                if session.requests_remaining <= 0:
-                    logger.info("[budget] daily request budget exhausted, stopping")
-                    break
-
-                end = min(start + batch_size, total_teams)
-                batch = teams_div.iloc[start:end]
-
-                for i, row in enumerate(batch.itertuples(index=False), start=1):
+            try:
+                for start in range(0, total_teams, batch_size):
                     if session.requests_remaining <= 0:
+                        logger.info("[budget] daily request budget exhausted, stopping")
                         break
 
-                    short_break_every(rest_every, start + i, sleep_s=60.0)
-                    team_id = row.team_id
-                    school = row.team_name
-                    conference = row.conference
-                    url = f"{BASE}/teams/{team_id}"
+                    end = min(start + batch_size, total_teams)
+                    batch = teams_div.iloc[start:end]
 
-                    html, status = session.fetch(
-                        url,
-                        wait_selector="div.card-header:has-text('Schedule/Results')",
-                        wait_timeout=10000
-                    )
+                    for i, row in enumerate(batch.itertuples(index=False), start=1):
+                        if session.requests_remaining <= 0:
+                            break
 
-                    if not html or status >= 400:
-                        logger.info(f"failed {school} ({team_id}): HTTP {status}")
-                        continue
+                        short_break_every(rest_every, start + i, sleep_s=60.0)
+                        team_id = row.team_id
+                        school = row.team_name
+                        conference = row.conference
+                        url = f"{BASE}/teams/{team_id}"
 
-                    trs = session.page.query_selector_all("div.card-body table tbody tr")
+                        html, status = session.fetch(
+                            url,
+                            wait_selector="div.card-header:has-text('Schedule/Results')",
+                            wait_timeout=10000
+                        )
 
-                    for tr in trs:
-                        tds = tr.query_selector_all("td")
-                        if not tds or len(tds) < 3:
+                        if not html or status >= 400:
+                            logger.info(f"failed {school} ({team_id}): HTTP {status}")
                             continue
 
-                        date = tds[0].inner_text().strip()[:10]
+                        trs = session.page.query_selector_all("div.card-body table tbody tr")
 
-                        opponent_raw = tds[1].inner_text().strip()
-                        opponent_link = tds[1].query_selector("a[href*='/teams/']")
-                        opponent_team_id = None
-                        opponent_name = opponent_raw
-                        away = opponent_raw.startswith("@")
+                        for tr in trs:
+                            tds = tr.query_selector_all("td")
+                            if not tds or len(tds) < 3:
+                                continue
 
-                        if opponent_link:
-                            href = opponent_link.get_attribute("href")
-                            m = re.search(r"/teams/(\d+)", href)
-                            if m:
-                                opponent_team_id = int(m.group(1))
-                            opponent_name = opponent_link.inner_text().strip()
+                            date = tds[0].inner_text().strip()[:10]
 
-                        result_raw = tds[2].inner_text().strip()
-                        game_result = None
-                        team_score, opp_score = None, None
-                        if result_raw:
-                            game_result = result_raw.split()[0]
-                            score_match = re.search(r"(\d+)-(\d+)", result_raw)
-                            if score_match:
-                                team_score, opp_score = map(int, score_match.groups())
+                            opponent_raw = tds[1].inner_text().strip()
+                            opponent_link = tds[1].query_selector("a[href*='/teams/']")
+                            opponent_team_id = None
+                            opponent_name = opponent_raw
+                            away = opponent_raw.startswith("@")
 
-                        game_link = tds[2].query_selector("a[href*='/contests/']")
-                        game_url, contest_id = None, None
-                        if game_link:
-                            href = game_link.get_attribute("href")
-                            game_url = BASE + href
-                            m = re.search(r"/contests/(\d+)", href)
-                            if m:
-                                contest_id = int(m.group(1))
+                            if opponent_link:
+                                href = opponent_link.get_attribute("href")
+                                m = re.search(r"/teams/(\d+)", href)
+                                if m:
+                                    opponent_team_id = int(m.group(1))
+                                opponent_name = opponent_link.inner_text().strip()
 
-                        rows.append({
-                            "year": year,
-                            "division": div,
-                            "team_id": team_id,
-                            "team_name": school,
-                            "conference": conference,
-                            "date": date,
-                            "opponent": opponent_name,
-                            "opponent_team_id": opponent_team_id,
-                            "away": away,
-                            "game_result": game_result,
-                            "team_score": team_score,
-                            "opponent_score": opp_score,
-                            "game_url": game_url,
-                            "contest_id": contest_id
-                        })
+                            result_raw = tds[2].inner_text().strip()
+                            game_result = None
+                            team_score, opp_score = None, None
+                            if result_raw:
+                                game_result = result_raw.split()[0]
+                                score_match = re.search(r"(\d+)-(\d+)", result_raw)
+                                if score_match:
+                                    team_score, opp_score = map(int, score_match.groups())
 
-                    logger.info(f"success {school} ({team_id})")
+                            game_link = tds[2].query_selector("a[href*='/contests/']")
+                            game_url, contest_id = None, None
+                            if game_link:
+                                href = game_link.get_attribute("href")
+                                game_url = BASE + href
+                                m = re.search(r"/contests/(\d+)", href)
+                                if m:
+                                    contest_id = int(m.group(1))
 
-                logger.info(f"batch {start+1}-{end} done (budget: {session.requests_remaining})")
-                cooldown_between_batches(end, total_teams, float(batch_cooldown_s))
+                            rows.append({
+                                "year": year,
+                                "division": div,
+                                "team_id": team_id,
+                                "team_name": school,
+                                "conference": conference,
+                                "date": date,
+                                "opponent": opponent_name,
+                                "opponent_team_id": opponent_team_id,
+                                "away": away,
+                                "game_result": game_result,
+                                "team_score": team_score,
+                                "opponent_score": opp_score,
+                                "game_url": game_url,
+                                "contest_id": contest_id
+                            })
+
+                        logger.info(f"success {school} ({team_id})")
+
+                    logger.info(f"batch {start+1}-{end} done (budget: {session.requests_remaining})")
+                    cooldown_between_batches(end, total_teams, float(batch_cooldown_s))
+            except HardBlockError as exc:
+                logger.error(str(exc))
+                logger.info("[STOP] hard block detected. Saving collected schedule rows and exiting.")
 
             if rows:
                 df = pd.DataFrame(rows).dropna(subset=['game_url'])
@@ -158,6 +162,8 @@ def scrape_schedules(
                 fpath = outdir / fname
                 df.to_csv(fpath, index=False)
                 logger.info(f"saved {fpath} ({len(df)} rows) for division {div}")
+            if session.hard_blocked:
+                return
 
 
 if __name__ == "__main__":

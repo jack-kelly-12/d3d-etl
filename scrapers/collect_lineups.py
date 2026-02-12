@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 
 from .constants import BASE
-from .scraper_utils import ScraperConfig, ScraperSession
+from .scraper_utils import HardBlockError, ScraperConfig, ScraperSession
 
 
 def now_iso() -> str:
@@ -293,88 +293,93 @@ def scrape_lineups(
     )
 
     with ScraperSession(config) as session:
-        for div in divisions:
-            sched = get_schedules(indir, div, year)
-            if sched.empty:
-                print(f"no schedule for d{div} {year}")
-                continue
+        try:
+            for div in divisions:
+                sched = get_schedules(indir, div, year)
+                if sched.empty:
+                    print(f"no schedule for d{div} {year}")
+                    continue
 
-            hit_out = outdir_path / f"d{div}_batting_lineups_{year}.csv"
-            pit_out = outdir_path / f"d{div}_pitching_lineups_{year}.csv"
-
-            hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
-
-            all_games = sched["contest_id"].tolist()
-            games = [gid for gid in all_games if gid not in both_done]
-
-            total_games = len(all_games)
-            remaining = len(games)
-
-            print(f"\n=== d{div} {year} lineups — total {total_games} | done {len(both_done)} | remaining {remaining} ===")
-            print(f"    (hit done: {len(hit_done)} | pit done: {len(pit_done)} | budget remaining: {session.requests_remaining})")
-
-            if remaining == 0:
-                continue
-
-            for batch_start in range(0, remaining, batch_size):
-                if session.requests_remaining <= 0:
-                    print("[budget] daily request budget exhausted, stopping")
-                    break
-
-                batch = games[batch_start:batch_start + batch_size]
-                batch_end = batch_start + len(batch)
-
-                print(f"\n[batch] games {batch_start+1}-{batch_end} (budget: {session.requests_remaining})")
+                hit_out = outdir_path / f"d{div}_batting_lineups_{year}.csv"
+                pit_out = outdir_path / f"d{div}_pitching_lineups_{year}.csv"
 
                 hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
 
-                for gid in batch:
+                all_games = sched["contest_id"].tolist()
+                games = [gid for gid in all_games if gid not in both_done]
+
+                total_games = len(all_games)
+                remaining = len(games)
+
+                print(f"\n=== d{div} {year} lineups — total {total_games} | done {len(both_done)} | remaining {remaining} ===")
+                print(f"    (hit done: {len(hit_done)} | pit done: {len(pit_done)} | budget remaining: {session.requests_remaining})")
+
+                if remaining == 0:
+                    continue
+
+                for batch_start in range(0, remaining, batch_size):
                     if session.requests_remaining <= 0:
+                        print("[budget] daily request budget exhausted, stopping")
                         break
 
-                    if gid in both_done:
-                        continue
+                    batch = games[batch_start:batch_start + batch_size]
+                    batch_end = batch_start + len(batch)
 
-                    print(f"\n[game] {gid}")
+                    print(f"\n[batch] games {batch_start+1}-{batch_end} (budget: {session.requests_remaining})")
 
-                    hit_df, pit_df, status, html_content = scrape_game_lineups(session, gid, div, year)
+                    hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
 
-                    if is_hard_block(status):
-                        print("[STOP] got 403 (hard block). Stopping for safety (CSV progress preserved).")
-                        return
+                    for gid in batch:
+                        if session.requests_remaining <= 0:
+                            break
 
-                    if status >= 400:
-                        print(f"  failed: HTTP {status}")
-                        continue
+                        if gid in both_done:
+                            continue
 
-                    wrote_hit = 0
-                    wrote_pit = 0
+                        print(f"\n[game] {gid}")
 
-                    if gid not in hit_done and not hit_df.empty:
-                        hit_df = _dedupe_hit(hit_df)
-                        append_csv(hit_out, hit_df)
-                        wrote_hit = len(hit_df)
-                        hit_done.add(gid)
+                        hit_df, pit_df, status, html_content = scrape_game_lineups(session, gid, div, year)
 
-                    if gid not in pit_done and not pit_df.empty:
-                        pit_df = _dedupe_pit(pit_df)
-                        append_csv(pit_out, pit_df)
-                        wrote_pit = len(pit_df)
-                        pit_done.add(gid)
+                        if is_hard_block(status):
+                            print("[STOP] got 403 (hard block). Stopping for safety (CSV progress preserved).")
+                            return
 
-                    if gid in hit_done and gid in pit_done:
-                        both_done.add(gid)
+                        if status >= 400:
+                            print(f"  failed: HTTP {status}")
+                            continue
 
-                    print(f"  ok: hit={wrote_hit} pit={wrote_pit} (budget: {session.requests_remaining})")
+                        wrote_hit = 0
+                        wrote_pit = 0
 
-                if batch_end < remaining:
-                    cooldown = int(batch_cooldown_s)
-                    print(f"\n[cooldown] sleeping {cooldown}s before next batch")
-                    time.sleep(cooldown)
+                        if gid not in hit_done and not hit_df.empty:
+                            hit_df = _dedupe_hit(hit_df)
+                            append_csv(hit_out, hit_df)
+                            wrote_hit = len(hit_df)
+                            hit_done.add(gid)
 
-            print(f"\n[done] division d{div} {year}")
-            print(f"  batting file:  {hit_out}")
-            print(f"  pitching file: {pit_out}")
+                        if gid not in pit_done and not pit_df.empty:
+                            pit_df = _dedupe_pit(pit_df)
+                            append_csv(pit_out, pit_df)
+                            wrote_pit = len(pit_df)
+                            pit_done.add(gid)
+
+                        if gid in hit_done and gid in pit_done:
+                            both_done.add(gid)
+
+                        print(f"  ok: hit={wrote_hit} pit={wrote_pit} (budget: {session.requests_remaining})")
+
+                    if batch_end < remaining:
+                        cooldown = int(batch_cooldown_s)
+                        print(f"\n[cooldown] sleeping {cooldown}s before next batch")
+                        time.sleep(cooldown)
+
+                print(f"\n[done] division d{div} {year}")
+                print(f"  batting file:  {hit_out}")
+                print(f"  pitching file: {pit_out}")
+        except HardBlockError as exc:
+            print(str(exc))
+            print("[STOP] hard block detected. Stopping scraper (CSV progress preserved).")
+            return
 
 
 if __name__ == "__main__":

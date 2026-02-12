@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from .constants import BASE
-from .scraper_utils import ScraperConfig, ScraperSession
+from .scraper_utils import HardBlockError, ScraperConfig, ScraperSession
 
 
 def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,140 +201,145 @@ def scrape_stats(
     )
 
     with ScraperSession(config) as session:
-        for div in divisions:
-            teams_div = teams.query("year == @year and division == @div").copy()
-            if teams_div.empty:
-                continue
+        try:
+            for div in divisions:
+                teams_div = teams.query("year == @year and division == @div").copy()
+                if teams_div.empty:
+                    continue
 
-            teams_div["team_id"] = teams_div["team_id"].astype(int)
-            total_teams = len(teams_div)
+                teams_div["team_id"] = teams_div["team_id"].astype(int)
+                total_teams = len(teams_div)
 
-            print(f"\n=== d{div} {year} team stats — {total_teams} teams ===")
-            print(f"    (budget remaining: {session.requests_remaining} requests)")
+                print(f"\n=== d{div} {year} team stats — {total_teams} teams ===")
+                print(f"    (budget remaining: {session.requests_remaining} requests)")
 
-            batting_out = outdir_path / f"d{div}_batting_{year}.csv"
-            pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
+                batting_out = outdir_path / f"d{div}_batting_{year}.csv"
+                pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
 
-            prog = load_progress(outdir_path, div, year)
+                prog = load_progress(outdir_path, div, year)
 
-            for start in range(0, total_teams, batch_size):
-                if session.requests_remaining <= 0:
-                    print("[budget] daily request budget exhausted, stopping")
-                    break
-
-                end = min(start + batch_size, total_teams)
-                batch = teams_div.iloc[start:end]
-
-                print(f"\n[batch] teams {start+1}-{end} (budget: {session.requests_remaining})")
-
-                for i, row in enumerate(batch.itertuples(index=False), start=1):
+                for start in range(0, total_teams, batch_size):
                     if session.requests_remaining <= 0:
+                        print("[budget] daily request budget exhausted, stopping")
                         break
 
-                    team_id = int(row.team_id)
-                    team_name = getattr(row, "team_name", "")
-                    conference = getattr(row, "conference", "")
+                    end = min(start + batch_size, total_teams)
+                    batch = teams_div.iloc[start:end]
 
-                    tp = prog.get(team_id) or TeamProgress(
-                        team_id=team_id, team_name=team_name, conference=conference
-                    )
+                    print(f"\n[batch] teams {start+1}-{end} (budget: {session.requests_remaining})")
 
-                    if tp.batting_done and tp.pitching_done:
-                        continue
+                    for i, row in enumerate(batch.itertuples(index=False), start=1):
+                        if session.requests_remaining <= 0:
+                            break
 
-                    print(f"[team] {team_name} ({team_id})")
+                        team_id = int(row.team_id)
+                        team_name = getattr(row, "team_name", "")
+                        conference = getattr(row, "conference", "")
 
-                    short_break_every(rest_every, (start + i))
+                        tp = prog.get(team_id) or TeamProgress(
+                            team_id=team_id, team_name=team_name, conference=conference
+                        )
 
-                    if not tp.batting_done:
-                        url = f"{BASE}/teams/{team_id}/season_to_date_stats?year={year}"
-                        html, status = session.fetch(url, wait_selector="#stat_grid tbody tr", wait_timeout=15000)
-                        tp.last_status_batting = status
-                        tp.updated_at = now_iso()
-
-                        if is_hard_block(status):
-                            prog[team_id] = tp
-                            save_progress(outdir_path, div, year, prog)
-                            print("[STOP] got 403 (hard block). Saved progress and stopping for safety.")
-                            return
-
-                        if not html or status >= 400:
-                            print(f"FAILED batting: HTTP {status}")
-                            prog[team_id] = tp
-                            save_progress(outdir_path, div, year, prog)
+                        if tp.batting_done and tp.pitching_done:
                             continue
 
-                        table = session.page.query_selector("#stat_grid")
-                        if not table:
-                            print("FAILED batting: no #stat_grid")
+                        print(f"[team] {team_name} ({team_id})")
+
+                        short_break_every(rest_every, (start + i))
+
+                        if not tp.batting_done:
+                            url = f"{BASE}/teams/{team_id}/season_to_date_stats?year={year}"
+                            html, status = session.fetch(url, wait_selector="#stat_grid tbody tr", wait_timeout=15000)
+                            tp.last_status_batting = status
+                            tp.updated_at = now_iso()
+
+                            if is_hard_block(status):
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                print("[STOP] got 403 (hard block). Saved progress and stopping for safety.")
+                                return
+
+                            if not html or status >= 400:
+                                print(f"FAILED batting: HTTP {status}")
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                continue
+
+                            table = session.page.query_selector("#stat_grid")
+                            if not table:
+                                print("FAILED batting: no #stat_grid")
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                continue
+
+                            rows_bat = parse_table(session.page, table, year, team_name, conference, div, team_id)
+                            if rows_bat:
+                                df_bat = clean_stat_df(pd.DataFrame(rows_bat))
+                                if not df_bat.empty:
+                                    append_csv(batting_out, df_bat)
+                                    print(f"OK batting -> wrote {len(df_bat)} rows")
+
+                            tp.batting_done = True
                             prog[team_id] = tp
                             save_progress(outdir_path, div, year, prog)
-                            continue
 
-                        rows_bat = parse_table(session.page, table, year, team_name, conference, div, team_id)
-                        if rows_bat:
-                            df_bat = clean_stat_df(pd.DataFrame(rows_bat))
-                            if not df_bat.empty:
-                                append_csv(batting_out, df_bat)
-                                print(f"OK batting -> wrote {len(df_bat)} rows")
+                        if not tp.pitching_done:
+                            pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
+                            if not pitch_link:
+                                print("FAILED pitching: no Pitching tab")
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                continue
 
-                        tp.batting_done = True
-                        prog[team_id] = tp
-                        save_progress(outdir_path, div, year, prog)
+                            href = pitch_link.get_attribute("href") or ""
+                            if not href:
+                                print("FAILED pitching: tab missing href")
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                continue
 
-                    if not tp.pitching_done:
-                        pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
-                        if not pitch_link:
-                            print("FAILED pitching: no Pitching tab")
+                            pitch_url = BASE + href
+                            html2, status2 = session.fetch(pitch_url, wait_selector="#stat_grid tbody tr", wait_timeout=15000)
+                            tp.last_status_pitching = status2
+                            tp.updated_at = now_iso()
+
+                            if is_hard_block(status2):
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                print("[STOP] got 403 (hard block). Saved progress and stopping for safety.")
+                                return
+
+                            if not html2 or status2 >= 400:
+                                print(f"FAILED pitching: HTTP {status2}")
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                continue
+
+                            table2 = session.page.query_selector("#stat_grid")
+                            if not table2:
+                                print("FAILED pitching: no #stat_grid")
+                                prog[team_id] = tp
+                                save_progress(outdir_path, div, year, prog)
+                                continue
+
+                            rows_pit = parse_table(session.page, table2, year, team_name, conference, div, team_id)
+                            if rows_pit:
+                                df_pit = clean_stat_df(pd.DataFrame(rows_pit))
+                                if not df_pit.empty:
+                                    append_csv(pitching_out, df_pit)
+                                    print(f"OK pitching -> wrote {len(df_pit)} rows")
+
+                            tp.pitching_done = True
                             prog[team_id] = tp
                             save_progress(outdir_path, div, year, prog)
-                            continue
 
-                        href = pitch_link.get_attribute("href") or ""
-                        if not href:
-                            print("FAILED pitching: tab missing href")
-                            prog[team_id] = tp
-                            save_progress(outdir_path, div, year, prog)
-                            continue
-
-                        pitch_url = BASE + href
-                        html2, status2 = session.fetch(pitch_url, wait_selector="#stat_grid tbody tr", wait_timeout=15000)
-                        tp.last_status_pitching = status2
-                        tp.updated_at = now_iso()
-
-                        if is_hard_block(status2):
-                            prog[team_id] = tp
-                            save_progress(outdir_path, div, year, prog)
-                            print("[STOP] got 403 (hard block). Saved progress and stopping for safety.")
-                            return
-
-                        if not html2 or status2 >= 400:
-                            print(f"FAILED pitching: HTTP {status2}")
-                            prog[team_id] = tp
-                            save_progress(outdir_path, div, year, prog)
-                            continue
-
-                        table2 = session.page.query_selector("#stat_grid")
-                        if not table2:
-                            print("FAILED pitching: no #stat_grid")
-                            prog[team_id] = tp
-                            save_progress(outdir_path, div, year, prog)
-                            continue
-
-                        rows_pit = parse_table(session.page, table2, year, team_name, conference, div, team_id)
-                        if rows_pit:
-                            df_pit = clean_stat_df(pd.DataFrame(rows_pit))
-                            if not df_pit.empty:
-                                append_csv(pitching_out, df_pit)
-                                print(f"OK pitching -> wrote {len(df_pit)} rows")
-
-                        tp.pitching_done = True
-                        prog[team_id] = tp
-                        save_progress(outdir_path, div, year, prog)
-
-            print(f"\n[done] division d{div} {year}")
-            print(f"  batting file:  {batting_out}")
-            print(f"  pitching file: {pitching_out}")
+                print(f"\n[done] division d{div} {year}")
+                print(f"  batting file:  {batting_out}")
+                print(f"  pitching file: {pitching_out}")
+        except HardBlockError as exc:
+            print(str(exc))
+            print("[STOP] hard block detected. Saved progress and stopping for safety.")
+            return
 
 
 if __name__ == "__main__":
