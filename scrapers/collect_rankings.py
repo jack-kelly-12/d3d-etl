@@ -23,7 +23,6 @@ def _sleep_jitter(seconds: float, jitter_frac: float = 0.25) -> None:
 
 
 def scrape_massey_rankings(
-    data_dir: str | None,
     years: list[int],
     divisions: list[int],
     outdir: str | None = None,
@@ -37,8 +36,6 @@ def scrape_massey_rankings(
 ):
     if outdir:
         outdir = Path(outdir)
-    elif data_dir:
-        outdir = Path(data_dir) / "rankings"
     else:
         raise ValueError("Either data_dir or outdir must be provided.")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -187,7 +184,6 @@ def normalize_massey_rankings(df: pd.DataFrame, division: int, year: int) -> pd.
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", required=True)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--years", nargs="+", required=True)
     parser.add_argument("--divisions", nargs="+", type=int, required=True)
@@ -203,7 +199,6 @@ if __name__ == "__main__":
     years = _parse_years(args.years)
 
     scrape_massey_rankings(
-        data_dir=args.data_dir,
         years=years,
         divisions=args.divisions,
         outdir=args.outdir,

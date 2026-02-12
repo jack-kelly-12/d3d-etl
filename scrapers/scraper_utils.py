@@ -190,6 +190,7 @@ class ScraperConfig:
     jitter_pct: float = 0.3
     max_retries: int = 3
     timeout_ms: int = 30000
+    daily_request_budget: int | None = 20000
     headless: bool = False
     block_resources: bool = False
     cache_html: bool = False
@@ -219,6 +220,17 @@ class ScraperSession:
     @property
     def hard_blocked(self) -> bool:
         return self._hard_blocked
+
+    @property
+    def requests_made(self) -> int:
+        return self._request_count
+
+    @property
+    def requests_remaining(self) -> int | float:
+        budget = self.config.daily_request_budget
+        if budget is None:
+            return float("inf")
+        return max(0, int(budget) - self._request_count)
 
 
 
@@ -372,6 +384,17 @@ class AsyncScraperSession:
     @property
     def hard_blocked(self) -> bool:
         return self._hard_blocked
+
+    @property
+    def requests_made(self) -> int:
+        return self._request_count
+
+    @property
+    def requests_remaining(self) -> int | float:
+        budget = self.config.daily_request_budget
+        if budget is None:
+            return float("inf")
+        return max(0, int(budget) - self._request_count)
 
     async def start(self, playwright):
         self._browser = await playwright.chromium.launch(headless=self.config.headless)
