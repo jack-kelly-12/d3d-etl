@@ -48,16 +48,13 @@ def append_csv(path: Path, df: pd.DataFrame) -> None:
 def clean_stat_df(df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_cols(df)
 
-    # Require player id
     if "ncaa_id" in df.columns:
         df["ncaa_id"] = pd.to_numeric(df["ncaa_id"], errors="coerce").astype("Int64")
     df = df.dropna(subset=["ncaa_id"])
 
-    # Drop junk columns if present
     if "gdp" in df.columns:
         df = df.drop(columns=["gdp"])
 
-    # Normalize known column names
     df = df.rename(columns={
         "slgpct": "slg_pct",
         "obpct": "ob_pct",
@@ -181,6 +178,7 @@ def scrape_stats(
     outdir: str,
     batch_size: int = 10,
     base_delay: float = 10.0,
+    jitter_pct: float = 0.6,
     daily_budget: int = 20000,
     rest_every: int = 12,
 ):
@@ -196,6 +194,7 @@ def scrape_stats(
 
     config = ScraperConfig(
         base_delay=base_delay,
+        jitter_pct=jitter_pct,
         block_resources=False,
         daily_request_budget=daily_budget,
     )
@@ -349,9 +348,10 @@ if __name__ == "__main__":
     parser.add_argument("--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/stats")
     parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--base_delay", type=float, default=10.0)
+    parser.add_argument("--base_delay", type=float, default=8.0)
+    parser.add_argument("--jitter_pct", type=float, default=0.6)
     parser.add_argument("--daily_budget", type=int, default=20000)
-    parser.add_argument("--rest_every", type=int, default=12, help="Rest 60s every N teams")
+    parser.add_argument("--rest_every", type=int, default=50, help="Rest 60s every N teams")
     args = parser.parse_args()
 
     scrape_stats(
@@ -361,6 +361,7 @@ if __name__ == "__main__":
         outdir=args.outdir,
         batch_size=args.batch_size,
         base_delay=args.base_delay,
+        jitter_pct=args.jitter_pct,
         daily_budget=args.daily_budget,
         rest_every=args.rest_every,
     )

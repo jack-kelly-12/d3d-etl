@@ -115,13 +115,6 @@ jobs:
               --outdir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
 
-            xvfb-run -a python -m scrapers.collect_stats \
-              --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
-              --team_ids_file "$TEAM_IDS_FILE" \
-              --outdir "$STATS_OUTDIR" \
-              --base_delay "$BASE_DELAY"
-
             xvfb-run -a python -m scrapers.collect_pbp \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
@@ -134,6 +127,13 @@ jobs:
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
               --outdir "$LINEUPS_OUTDIR" \
+              --base_delay "$BASE_DELAY"
+
+            xvfb-run -a python -m scrapers.collect_stats \
+              --year "$YEAR" \
+              --divisions "${DIVS_ARR[@]}" \
+              --team_ids_file "$TEAM_IDS_FILE" \
+              --outdir "$STATS_OUTDIR" \
               --base_delay "$BASE_DELAY"
           done
 
