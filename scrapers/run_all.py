@@ -196,4 +196,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.run_all", flush=True)
     raise SystemExit(main())

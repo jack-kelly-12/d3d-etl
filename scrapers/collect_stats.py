@@ -199,23 +199,55 @@ def scrape_stats(
         daily_request_budget=daily_budget,
     )
 
+    division_jobs = []
+    for div in divisions:
+        teams_div = teams.query("year == @year and division == @div").copy()
+        if teams_div.empty:
+            continue
+
+        teams_div["team_id"] = teams_div["team_id"].astype(int)
+        total_teams = len(teams_div)
+        batting_out = outdir_path / f"d{div}_batting_{year}.csv"
+        pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
+        prog = load_progress(outdir_path, div, year)
+
+        done_ids = {
+            tid for tid, tp in prog.items()
+            if tp.batting_done and tp.pitching_done
+        }
+        pending = teams_div[~teams_div["team_id"].isin(done_ids)].copy()
+
+        print(
+            f"\n=== d{div} {year} team stats — total {total_teams} | done {len(done_ids)} | remaining {len(pending)} ==="
+        )
+
+        division_jobs.append(
+            {
+                "div": div,
+                "teams_div": pending,
+                "batting_out": batting_out,
+                "pitching_out": pitching_out,
+                "prog": prog,
+            }
+        )
+
+    if not any(len(job["teams_div"]) > 0 for job in division_jobs):
+        return
+
     with ScraperSession(config) as session:
         try:
-            for div in divisions:
-                teams_div = teams.query("year == @year and division == @div").copy()
-                if teams_div.empty:
-                    continue
-
-                teams_div["team_id"] = teams_div["team_id"].astype(int)
+            for job in division_jobs:
+                div = job["div"]
+                teams_div = job["teams_div"]
+                batting_out = job["batting_out"]
+                pitching_out = job["pitching_out"]
+                prog = job["prog"]
                 total_teams = len(teams_div)
 
-                print(f"\n=== d{div} {year} team stats — {total_teams} teams ===")
+                if total_teams == 0:
+                    continue
+
                 print(f"    (budget remaining: {session.requests_remaining} requests)")
-
-                batting_out = outdir_path / f"d{div}_batting_{year}.csv"
-                pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
-
-                prog = load_progress(outdir_path, div, year)
 
                 for start in range(0, total_teams, batch_size):
                     if session.requests_remaining <= 0:
@@ -238,9 +270,6 @@ def scrape_stats(
                         tp = prog.get(team_id) or TeamProgress(
                             team_id=team_id, team_name=team_name, conference=conference
                         )
-
-                        if tp.batting_done and tp.pitching_done:
-                            continue
 
                         print(f"[team] {team_name} ({team_id})")
 
@@ -342,6 +371,7 @@ def scrape_stats(
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.collect_stats", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])

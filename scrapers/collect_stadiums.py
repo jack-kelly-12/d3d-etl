@@ -140,6 +140,7 @@ def scrape_stadiums(
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.collect_stadiums", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--team_ids_file", default="./data/ncaa_team_history.csv")
     parser.add_argument("--outdir", default="./data/stadiums")

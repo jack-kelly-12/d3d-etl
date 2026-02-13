@@ -183,6 +183,7 @@ def normalize_massey_rankings(df: pd.DataFrame, division: int, year: int) -> pd.
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.collect_rankings", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--years", nargs="+", required=True)

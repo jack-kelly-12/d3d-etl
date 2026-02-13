@@ -381,6 +381,7 @@ def scrape_schedules(
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.collect_schedules", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])

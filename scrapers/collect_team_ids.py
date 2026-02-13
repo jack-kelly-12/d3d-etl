@@ -122,6 +122,7 @@ def scrape_team_history(
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.collect_team_ids", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data")
     parser.add_argument("--batch_size", type=int, default=25)

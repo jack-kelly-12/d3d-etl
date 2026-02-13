@@ -447,6 +447,7 @@ async def main(
 
 
 if __name__ == "__main__":
+    print("[start] scrapers.collect_headshots", flush=True)
     parser = argparse.ArgumentParser(description="Scrape team roster headshots")
     parser.add_argument("--season", type=int, default=2025, help="Season year")
     parser.add_argument("--team", type=str, default=None, help="Specific team name to scrape")
