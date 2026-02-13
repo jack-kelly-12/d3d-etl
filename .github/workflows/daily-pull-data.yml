@@ -108,14 +108,14 @@ jobs:
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
           for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -m scrapers.collect_schedules \
+            xvfb-run -a python -u -m scrapers.collect_schedules \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
 
-            xvfb-run -a python -m scrapers.collect_pbp \
+            xvfb-run -a python -u -m scrapers.collect_pbp \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
@@ -123,7 +123,7 @@ jobs:
               --base_delay "$BASE_DELAY" \
               --missing_only
 
-            xvfb-run -a python -m scrapers.collect_lineups \
+            xvfb-run -a python -u -m scrapers.collect_lineups \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
@@ -131,7 +131,7 @@ jobs:
               --base_delay "$BASE_DELAY" \
               --missing_only
 
-            xvfb-run -a python -m scrapers.collect_stats \
+            xvfb-run -a python -u -m scrapers.collect_stats \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
@@ -234,7 +234,7 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
-          xvfb-run -a python -m scrapers.collect_rankings \
+          xvfb-run -a python -u -m scrapers.collect_rankings \
             --outdir "$RANKINGS_OUTDIR" \
             --years "${YEARS_ARR[@]}" \
             --divisions "${DIVS_ARR[@]}" \

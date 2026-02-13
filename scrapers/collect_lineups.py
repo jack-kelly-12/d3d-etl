@@ -277,10 +277,12 @@ def scrape_lineups(
     daily_budget: int = 20000,
     batch_cooldown_s: int = 90,
 ):
+    print("[trace] collect_lineups: initializing", flush=True)
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
 
     division_jobs = []
+    print("[trace] collect_lineups: scanning schedules/progress", flush=True)
     for div in divisions:
         sched = get_schedules(indir, div, year)
         if sched.empty:
@@ -320,6 +322,7 @@ def scrape_lineups(
         )
 
     if not any(job["remaining"] > 0 for job in division_jobs):
+        print("[trace] collect_lineups: no remaining games, exiting", flush=True)
         return
 
     config = ScraperConfig(
@@ -329,7 +332,9 @@ def scrape_lineups(
         jitter_pct=0.4,
     )
 
+    print("[trace] collect_lineups: opening ScraperSession", flush=True)
     with ScraperSession(config) as session:
+        print("[trace] collect_lineups: ScraperSession ready", flush=True)
         try:
             for job in division_jobs:
                 div = job["div"]
