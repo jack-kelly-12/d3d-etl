@@ -127,35 +127,46 @@ def scrape_pbp(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    division_jobs = []
+    for div in divisions:
+        sched = get_schedules(indir, div, year)
+        if sched.empty:
+            logger.info(f"no schedule for d{div} {year}")
+            continue
+
+        existing, done_ids = load_existing(outdir, div, year)
+        sched = sched[sched["contest_id"].notna()]
+
+        if missing_only:
+            to_scrape = sched[~sched["contest_id"].isin(done_ids)]
+            skipped = len(sched) - len(to_scrape)
+            if skipped > 0:
+                logger.info(f"d{div} {year}: skipping {skipped} already-scraped games")
+            if to_scrape.empty:
+                logger.info(f"d{div} {year}: all {len(sched)} games already scraped")
+                continue
+        else:
+            to_scrape = sched
+            existing = pd.DataFrame()
+
+        total_games = len(to_scrape)
+        logger.info(f"\n=== d{div} {year} pbp — {total_games} games to scrape ===")
+        division_jobs.append({"div": div, "existing": existing, "to_scrape": to_scrape, "total_games": total_games})
+
+    if not division_jobs:
+        return
+
     config = ScraperConfig(base_delay=base_delay, block_resources=False)
 
     with ScraperSession(config) as session:
         try:
-            for div in divisions:
-                sched = get_schedules(indir, div, year)
-                if sched.empty:
-                    logger.info(f"no schedule for d{div} {year}")
-                    continue
-
-                existing, done_ids = load_existing(outdir, div, year)
-                sched = sched[sched["contest_id"].notna()]
-
-                if missing_only:
-                    to_scrape = sched[~sched["contest_id"].isin(done_ids)]
-                    skipped = len(sched) - len(to_scrape)
-                    if skipped > 0:
-                        logger.info(f"d{div} {year}: skipping {skipped} already-scraped games")
-                    if to_scrape.empty:
-                        logger.info(f"d{div} {year}: all {len(sched)} games already scraped")
-                        continue
-                else:
-                    to_scrape = sched
-                    existing = pd.DataFrame()
+            for job in division_jobs:
+                div = job["div"]
+                existing = job["existing"]
+                to_scrape = job["to_scrape"]
+                total_games = job["total_games"]
 
                 rows = []
-                total_games = len(to_scrape)
-                logger.info(f"\n=== d{div} {year} pbp — {total_games} games to scrape ===")
-
                 games_scraped = 0
                 fpath = outdir / f"d{div}_pbp_{year}.csv"
 

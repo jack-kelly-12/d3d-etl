@@ -280,6 +280,48 @@ def scrape_lineups(
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
 
+    division_jobs = []
+    for div in divisions:
+        sched = get_schedules(indir, div, year)
+        if sched.empty:
+            print(f"no schedule for d{div} {year}")
+            continue
+
+        hit_out = outdir_path / f"d{div}_batting_lineups_{year}.csv"
+        pit_out = outdir_path / f"d{div}_pitching_lineups_{year}.csv"
+        hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
+
+        all_games = sched["contest_id"].tolist()
+        games = [gid for gid in all_games if gid not in both_done] if missing_only else all_games
+
+        total_games = len(all_games)
+        remaining = len(games)
+
+        division_jobs.append(
+            {
+                "div": div,
+                "hit_out": hit_out,
+                "pit_out": pit_out,
+                "games": games,
+                "total_games": total_games,
+                "remaining": remaining,
+                "both_done_count": len(both_done),
+                "hit_done_count": len(hit_done),
+                "pit_done_count": len(pit_done),
+            }
+        )
+
+    for job in division_jobs:
+        print(
+            f"\n=== d{job['div']} {year} lineups — total {job['total_games']} | done {job['both_done_count']} | remaining {job['remaining']} ==="
+        )
+        print(
+            f"    (hit done: {job['hit_done_count']} | pit done: {job['pit_done_count']})"
+        )
+
+    if not any(job["remaining"] > 0 for job in division_jobs):
+        return
+
     config = ScraperConfig(
         base_delay=base_delay,
         block_resources=False,
@@ -289,28 +331,18 @@ def scrape_lineups(
 
     with ScraperSession(config) as session:
         try:
-            for div in divisions:
-                sched = get_schedules(indir, div, year)
-                if sched.empty:
-                    print(f"no schedule for d{div} {year}")
-                    continue
+            for job in division_jobs:
+                div = job["div"]
+                hit_out = job["hit_out"]
+                pit_out = job["pit_out"]
+                games = job["games"]
+                remaining = job["remaining"]
 
-                hit_out = outdir_path / f"d{div}_batting_lineups_{year}.csv"
-                pit_out = outdir_path / f"d{div}_pitching_lineups_{year}.csv"
+                if remaining <= 0:
+                    continue
 
                 hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
-
-                all_games = sched["contest_id"].tolist()
-                games = [gid for gid in all_games if gid not in both_done] if missing_only else all_games
-
-                total_games = len(all_games)
-                remaining = len(games)
-
-                print(f"\n=== d{div} {year} lineups — total {total_games} | done {len(both_done)} | remaining {remaining} ===")
-                print(f"    (hit done: {len(hit_done)} | pit done: {len(pit_done)} | budget remaining: {session.requests_remaining})")
-
-                if remaining == 0:
-                    continue
+                print(f"    (budget remaining: {session.requests_remaining})")
 
                 for batch_start in range(0, remaining, batch_size):
                     if session.requests_remaining <= 0:
