@@ -350,7 +350,7 @@ def scrape_schedules(
                         break
 
                     url = build_scoreboard_url(div, game_day)
-                    html, status = session.fetch(url, wait_selector="tr[id^='contest_']", wait_timeout=45000)
+                    html, status = session.fetch(url, wait_selector="tr[id^='contest_']", wait_timeout=5000)
                     if not html or status >= 400:
                         logger.info(f"d{div} {game_day.isoformat()}: HTTP {status}")
                         continue
