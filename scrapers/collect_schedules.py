@@ -3,6 +3,7 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -322,7 +323,7 @@ def scrape_schedules(
         block_resources=True,
     )
 
-    today = date.today()
+    today = datetime.now(ZoneInfo("America/New_York")).date()
     with ScraperSession(config) as session:
         for div in divisions:
             if div not in SEASON_DIVISION_IDS:

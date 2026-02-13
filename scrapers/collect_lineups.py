@@ -277,6 +277,7 @@ def scrape_lineups(
     outdir: str,
     year: int,
     divisions: List[int],
+    missing_only: bool = False,
     batch_size: int = 25,
     base_delay: float = 10.0,
     daily_budget: int = 20000,
@@ -306,7 +307,7 @@ def scrape_lineups(
                 hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
 
                 all_games = sched["contest_id"].tolist()
-                games = [gid for gid in all_games if gid not in both_done]
+                games = [gid for gid in all_games if gid not in both_done] if missing_only else all_games
 
                 total_games = len(all_games)
                 remaining = len(games)
@@ -333,7 +334,7 @@ def scrape_lineups(
                         if session.requests_remaining <= 0:
                             break
 
-                        if gid in both_done:
+                        if missing_only and gid in both_done:
                             continue
 
                         print(f"\n[game] {gid}")
@@ -386,6 +387,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
+    parser.add_argument("--missing_only", action="store_true", help="Only scrape contests missing from both lineup outputs")
     parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/lineups")
     parser.add_argument("--batch_size", type=int, default=25)
@@ -399,6 +401,7 @@ if __name__ == "__main__":
         outdir=args.outdir,
         year=args.year,
         divisions=args.divisions,
+        missing_only=args.missing_only,
         batch_size=args.batch_size,
         base_delay=args.base_delay,
         daily_budget=args.daily_budget,

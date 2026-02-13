@@ -3,7 +3,7 @@ name: Daily Pull
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 5 * * *"
+    - cron: "0 3 * * *"
 
 concurrency:
   group: d3d-etl-daily
@@ -120,14 +120,16 @@ jobs:
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
               --outdir "$PBP_OUTDIR" \
-              --base_delay "$BASE_DELAY"
+              --base_delay "$BASE_DELAY" \
+              --missing_only
 
             xvfb-run -a python -m scrapers.collect_lineups \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
               --outdir "$LINEUPS_OUTDIR" \
-              --base_delay "$BASE_DELAY"
+              --base_delay "$BASE_DELAY" \
+              --missing_only
 
             xvfb-run -a python -m scrapers.collect_stats \
               --year "$YEAR" \
