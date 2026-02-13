@@ -76,7 +76,7 @@ def _build_rankings_command(cfg: PipelineConfig) -> list[str]:
         sys.executable,
         "-m",
         "scrapers.collect_rankings",
-        "--data_dir",
+        "--outdir",
         str(cfg.rankings_data_dir),
         "--years",
         *years_args,

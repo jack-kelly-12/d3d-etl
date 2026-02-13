@@ -40,21 +40,14 @@ def looks_blocked(html_text: str) -> bool:
     return any(p in t for p in pats)
 
 
-def get_schedules(indir: str, div: int, year: int) -> pd.DataFrame:
+def get_schedules(indir, div, year):
     fpath = Path(indir) / f"d{div}_schedules_{year}.csv"
-    if not fpath.exists():
-        return pd.DataFrame()
-
-    df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
-    if "contest_id" not in df.columns:
-        return pd.DataFrame()
-
-    df = df.drop_duplicates(subset=["contest_id"])
-    df = df.dropna(subset=["contest_id"]).copy()
-    df["contest_id"] = pd.to_numeric(df["contest_id"], errors="coerce").astype("Int64")
-    df = df.dropna(subset=["contest_id"])
-    df["contest_id"] = df["contest_id"].astype(int)
-    return df
+    if fpath.exists():
+        df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
+        if "contest_id" in df.columns:
+            df = df.drop_duplicates(subset=["contest_id"]).dropna(subset=['inning'])
+            return df
+    return pd.DataFrame()
 
 
 def _parse_team_header_text(card_header_el) -> Tuple[Optional[int], str]:

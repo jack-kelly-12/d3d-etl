@@ -32,7 +32,7 @@ def get_schedules(indir, div, year):
     if fpath.exists():
         df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
         if "contest_id" in df.columns:
-            df = df.drop_duplicates(subset=["contest_id"])
+            df = df.drop_duplicates(subset=["contest_id"]).dropna(subset=['inning'])
             return df
     return pd.DataFrame()
 
