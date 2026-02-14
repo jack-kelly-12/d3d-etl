@@ -30,7 +30,9 @@ def _env_path(key: str, default: str) -> Path:
     return Path(os.getenv(key, default)).expanduser().resolve()
 
 
-def _normalize_bucket_and_prefix(bucket_raw: str | None, prefix_raw: str | None) -> tuple[str | None, str]:
+def _normalize_bucket_and_prefix(
+    bucket_raw: str | None, prefix_raw: str | None
+) -> tuple[str | None, str]:
     if not bucket_raw:
         return None, (prefix_raw or "").strip().strip("/")
 
@@ -72,7 +74,7 @@ class PipelineConfig:
     s3_sse_kms_key_id: str | None
 
     @classmethod
-    def from_env(cls, env_file: str | None = None) -> "PipelineConfig":
+    def from_env(cls, env_file: str | None = None) -> PipelineConfig:
         load_dotenv(dotenv_path=env_file or ".env", override=False)
 
         data_root = _env_path("DATA_ROOT", "./data")

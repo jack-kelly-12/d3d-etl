@@ -14,10 +14,17 @@ from .scraper_utils import HardBlockError, ScraperConfig, ScraperSession, get_sc
 logger = get_scraper_logger(__name__)
 
 SCOREBOARD_PATH = "/contests/livestream_scoreboards"
+
+# Hardcoded for 2026, to be fixed later
 SEASON_DIVISION_IDS = {
     1: 18783,
     2: 18784,
-    3: 18783,
+    3: 18785,
+}
+DIVISION_START_DATES = {
+    1: (2, 13),
+    2: (1, 30),
+    3: (1, 27),
 }
 
 OUT_COLS = [
@@ -95,13 +102,19 @@ def get_existing(path: Path) -> pd.DataFrame:
     return df[OUT_COLS].copy()
 
 
-def get_start_date(existing: pd.DataFrame, year: int) -> date:
+def _division_start_date(division: int, year: int) -> date:
+    month, day = DIVISION_START_DATES.get(division)
+    return date(year, month, day)
+
+
+def get_start_date(existing: pd.DataFrame, year: int, division: int) -> date:
+    default_start = _division_start_date(division, year)
     if existing.empty or "date" not in existing.columns:
-        return date(year, 2, 1)
+        return default_start
     parsed = pd.to_datetime(existing["date"], errors="coerce").dropna()
     if parsed.empty:
-        return date(year, 2, 1)
-    return (parsed.max().date() + timedelta(days=1))
+        return default_start
+    return parsed.max().date() + timedelta(days=1)
 
 
 def iter_dates(start: date, end: date):
@@ -299,7 +312,9 @@ def parse_scoreboard_page(html: str, division: int, year: int, game_day: date) -
 
 
 def save_schedule(path: Path, existing: pd.DataFrame, new_rows: list[dict]) -> pd.DataFrame:
-    new_df = pd.DataFrame(new_rows, columns=OUT_COLS) if new_rows else pd.DataFrame(columns=OUT_COLS)
+    new_df = (
+        pd.DataFrame(new_rows, columns=OUT_COLS) if new_rows else pd.DataFrame(columns=OUT_COLS)
+    )
     out = pd.concat([existing, new_df], ignore_index=True)
     for c in OUT_COLS:
         if c not in out.columns:
@@ -307,7 +322,9 @@ def save_schedule(path: Path, existing: pd.DataFrame, new_rows: list[dict]) -> p
     out = out[OUT_COLS].copy()
     out = out.drop_duplicates(subset=["year", "division", "contest_id", "team_id"], keep="last")
     out["date_parsed"] = pd.to_datetime(out["date"], errors="coerce")
-    out = out.sort_values(["date_parsed", "contest_id", "team_id"], na_position="last").drop(columns=["date_parsed"])
+    out = out.sort_values(["date_parsed", "contest_id", "team_id"], na_position="last").drop(
+        columns=["date_parsed"]
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(path, index=False)
     return out
@@ -333,7 +350,7 @@ def scrape_schedules(
         block_resources=True,
     )
 
-    today = datetime.now(ZoneInfo("America/New_York")).date()
+    yesterday = datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)
     with ScraperSession(config) as session:
         for div in divisions:
             if div not in SEASON_DIVISION_IDS:
@@ -345,8 +362,8 @@ def scrape_schedules(
             if played_ids_file.exists():
                 played_ids_file.unlink()
             existing = get_existing(fpath)
-            start_day = get_start_date(existing, year)
-            end_day = min(today, date(year, 12, 31))
+            start_day = get_start_date(existing, year, div)
+            end_day = yesterday
             played_team_ids: set[int] = set()
 
             if start_day > end_day:
@@ -365,7 +382,9 @@ def scrape_schedules(
                         break
 
                     url = build_scoreboard_url(div, game_day)
-                    html, status = session.fetch(url, wait_selector="tr[id^='contest_']", wait_timeout=5000)
+                    html, status = session.fetch(
+                        url, wait_selector="tr[id^='contest_']", wait_timeout=5000
+                    )
                     if not html or status >= 400:
                         logger.info(f"d{div} {game_day.isoformat()}: HTTP {status}")
                         continue
@@ -377,7 +396,9 @@ def scrape_schedules(
                             tid = row.get("team_id")
                             if tid is not None and not pd.isna(tid):
                                 played_team_ids.add(int(tid))
-                        logger.info(f"d{div} {game_day.isoformat()}: parsed {len(day_rows)} team rows")
+                        logger.info(
+                            f"d{div} {game_day.isoformat()}: parsed {len(day_rows)} team rows"
+                        )
 
                     if pending_rows and len(pending_rows) >= 500:
                         existing = save_schedule(fpath, existing, pending_rows)
@@ -409,7 +430,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
+    parser.add_argument(
+        "--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv"
+    )
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--base_delay", type=float, default=10.0)

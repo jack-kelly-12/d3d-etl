@@ -54,7 +54,9 @@ def scrape_stadiums(
                 year = int(row["year"])
 
                 url = f"{BASE}/teams/{team_id}"
-                html, status = session.fetch(url, wait_selector="div.card-header", wait_timeout=15000)
+                html, status = session.fetch(
+                    url, wait_selector="div.card-header", wait_timeout=15000
+                )
                 if not html or status >= 400:
                     logger.info(f"failed {team_name} ({team_id}): HTTP {status}")
                     continue
@@ -77,7 +79,9 @@ def scrape_stadiums(
                     logger.info(f"no card-body in stadium section {team_name} ({team_id})")
                     continue
 
-                venue_cards = card_body.query_selector_all("div.card[id^='team_page_season_venue_']")
+                venue_cards = card_body.query_selector_all(
+                    "div.card[id^='team_page_season_venue_']"
+                )
                 if not venue_cards:
                     logger.info(f"no venues found {team_name} ({team_id})")
                     continue

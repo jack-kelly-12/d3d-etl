@@ -7,13 +7,31 @@ DEFAULT_TIMEOUT_MS = 30000
 
 BLOCKED_RESOURCE_TYPES = {"image", "font", "stylesheet", "media", "other"}
 BLOCKED_EXTENSIONS = (
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
-    ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".css", ".mp4", ".webm", ".mp3", ".wav"
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".css",
+    ".mp4",
+    ".webm",
+    ".mp3",
+    ".wav",
 )
 BLOCKED_DOMAINS = (
-    "google-analytics.com", "googletagmanager.com", "facebook.com",
-    "doubleclick.net", "adsense", "analytics"
+    "google-analytics.com",
+    "googletagmanager.com",
+    "facebook.com",
+    "doubleclick.net",
+    "adsense",
+    "analytics",
 )
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

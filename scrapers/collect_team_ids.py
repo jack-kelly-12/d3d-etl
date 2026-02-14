@@ -35,7 +35,9 @@ def scrape_team_history(
 
     with ScraperSession(config) as session:
         try:
-            html, status = session.fetch(START_URL, wait_selector="#org_id_select", wait_timeout=60000)
+            html, status = session.fetch(
+                START_URL, wait_selector="#org_id_select", wait_timeout=60000
+            )
         except HardBlockError as exc:
             logger.error(str(exc))
             logger.info("[STOP] hard block detected before start page. Exiting.")
@@ -64,7 +66,9 @@ def scrape_team_history(
 
                 short_break_every(rest_every, i, sleep_s=60.0)
                 url = f"{BASE}/teams/history?org_id={org['org_id']}&sport_code=MBA"
-                html, status = session.fetch(url, wait_selector="#team_history_data_table tbody tr", wait_timeout=15000)
+                html, status = session.fetch(
+                    url, wait_selector="#team_history_data_table tbody tr", wait_timeout=15000
+                )
 
                 if not html or status >= 400:
                     logger.info(f"failed {org['team_name']} ({org['org_id']}): HTTP {status}")
@@ -95,25 +99,31 @@ def scrape_team_history(
                     link = tr.query_selector("td a[href^='/teams/']")
                     team_id = int(link.get_attribute("href").split("/")[2]) if link else None
 
-                    rows.append({
-                        "org_id": org["org_id"],
-                        "team_name": org["team_name"],
-                        "year": year,
-                        "division": division,
-                        "conference": tds[3],
-                        "coach": tds[1],
-                        "coach_id": None,
-                        "team_id": team_id
-                    })
+                    rows.append(
+                        {
+                            "org_id": org["org_id"],
+                            "team_name": org["team_name"],
+                            "year": year,
+                            "division": division,
+                            "conference": tds[3],
+                            "coach": tds[1],
+                            "coach_id": None,
+                            "team_id": team_id,
+                        }
+                    )
 
                 logger.info(f"success {org['team_name']} ({org['org_id']})")
 
                 if i % batch_size == 0:
-                    logger.info(f"Processed {i}/{len(orgs)} schools... (budget: {session.requests_remaining})")
+                    logger.info(
+                        f"Processed {i}/{len(orgs)} schools... (budget: {session.requests_remaining})"
+                    )
                     cooldown_between_batches(i, len(orgs), float(batch_cooldown_s))
         except HardBlockError as exc:
             logger.error(str(exc))
-            logger.info("[STOP] hard block detected. Saving collected team history rows and exiting.")
+            logger.info(
+                "[STOP] hard block detected. Saving collected team history rows and exiting."
+            )
 
         df = pd.DataFrame(rows)
         fpath = outdir / "ncaa_team_history.csv"

@@ -6,16 +6,18 @@ import pandas as pd
 def format_name(name: str | None) -> str:
     if pd.isna(name):
         return name
-    if ',' in name:
-        last, first = name.split(',', 1)
+    if "," in name:
+        last, first = name.split(",", 1)
         return f"{first.strip()} {last.strip()}"
     return name.strip()
+
 
 def normalize_name(name: str | None) -> str:
     if pd.isna(name) or not name:
         return ""
-    name = re.sub(r'[^\w\s]', '', name.lower())
-    return ' '.join(name.split())
+    name = re.sub(r"[^\w\s]", "", name.lower())
+    return " ".join(name.split())
+
 
 def parse_name_parts(name: str) -> tuple[str, str, str | None]:
     if pd.isna(name) or not name:
@@ -23,13 +25,13 @@ def parse_name_parts(name: str) -> tuple[str, str, str | None]:
 
     name = name.strip()
 
-    num_match = re.match(r'^#?(\d+)\s+(.+)$', name)
+    num_match = re.match(r"^#?(\d+)\s+(.+)$", name)
     number = num_match.group(1) if num_match else None
     if num_match:
         name = num_match.group(2)
 
-    if ',' in name:
-        parts = name.split(',', 1)
+    if "," in name:
+        parts = name.split(",", 1)
         last = parts[0].strip()
         first = parts[1].strip() if len(parts) > 1 else ""
     else:
@@ -38,17 +40,18 @@ def parse_name_parts(name: str) -> tuple[str, str, str | None]:
             return "", "", number
         elif len(parts) == 1:
             word = parts[0]
-            if re.match(r'^[A-Z]\.$', word) or len(word) <= 2:
-                return word.rstrip('.'), "", number
+            if re.match(r"^[A-Z]\.$", word) or len(word) <= 2:
+                return word.rstrip("."), "", number
             return "", word, number
         else:
             first = parts[0]
-            last = ' '.join(parts[1:])
+            last = " ".join(parts[1:])
 
-    first = first.rstrip('.')
-    last = last.rstrip('.')
+    first = first.rstrip(".")
+    last = last.rstrip(".")
 
     return first, last, number
+
 
 def generate_name_variations(first: str, last: str, number: str | None = None) -> list[str]:
     variations = []
@@ -107,9 +110,14 @@ def generate_name_variations(first: str, last: str, number: str | None = None) -
 
     return list(dict.fromkeys(variations))
 
-def build_name_lookup(roster_df: pd.DataFrame, team_col: str = 'team_name',
-                      name_col: str = 'player_name', id_col: str = 'player_id',
-                      number_col: str = 'number') -> dict[str, dict[str, tuple[str, str]]]:
+
+def build_name_lookup(
+    roster_df: pd.DataFrame,
+    team_col: str = "team_name",
+    name_col: str = "player_name",
+    id_col: str = "player_id",
+    number_col: str = "number",
+) -> dict[str, dict[str, tuple[str, str]]]:
     lookup = {}
 
     has_number = number_col in roster_df.columns
@@ -134,8 +142,8 @@ def build_name_lookup(roster_df: pd.DataFrame, team_col: str = 'team_name',
         variations = generate_name_variations(first, last, num_to_use)
         variations.append(canonical_name)
         variations.append(formatted)
-        if 'player_name_norm' in roster_df.columns and pd.notna(row.get('player_name_norm')):
-            variations.append(row['player_name_norm'])
+        if "player_name_norm" in roster_df.columns and pd.notna(row.get("player_name_norm")):
+            variations.append(row["player_name_norm"])
 
         for var in variations:
             if var and var.strip():
@@ -145,7 +153,10 @@ def build_name_lookup(roster_df: pd.DataFrame, team_col: str = 'team_name',
 
     return lookup
 
-def match_name(name: str, team: str, lookup: dict, threshold: int = 70) -> tuple[str | None, str | None]:
+
+def match_name(
+    name: str, team: str, lookup: dict, threshold: int = 70
+) -> tuple[str | None, str | None]:
     from rapidfuzz import fuzz, process
 
     if pd.isna(name) or pd.isna(team) or not name or not team:
@@ -175,10 +186,7 @@ def match_name(name: str, team: str, lookup: dict, threshold: int = 70) -> tuple
     all_variations = list(team_lookup.keys())
 
     match = process.extractOne(
-        name_lower,
-        all_variations,
-        scorer=fuzz.token_sort_ratio,
-        score_cutoff=threshold
+        name_lower, all_variations, scorer=fuzz.token_sort_ratio, score_cutoff=threshold
     )
 
     if match:
@@ -186,10 +194,7 @@ def match_name(name: str, team: str, lookup: dict, threshold: int = 70) -> tuple
 
     if last:
         match = process.extractOne(
-            last.lower(),
-            all_variations,
-            scorer=fuzz.partial_ratio,
-            score_cutoff=85
+            last.lower(), all_variations, scorer=fuzz.partial_ratio, score_cutoff=85
         )
         if match:
             return team_lookup[match[0]]

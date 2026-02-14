@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
 
 import boto3
 from botocore.exceptions import ClientError
@@ -52,7 +51,9 @@ def sync_directory_to_s3(
     client = boto3.client("s3", region_name=region) if region else boto3.client("s3")
 
     files = _iter_local_files(local_root)
-    logger.info(f"S3 push start: {len(files)} local files from {local_root} to s3://{bucket}/{prefix}")
+    logger.info(
+        f"S3 push start: {len(files)} local files from {local_root} to s3://{bucket}/{prefix}"
+    )
 
     uploaded = 0
     extra_args: dict[str, str] = {}
@@ -108,8 +109,8 @@ def sync_s3_prefix_to_directory(
 
     logger.info(f"S3 pull start: {len(keys)} objects from s3://{bucket}/{prefix} to {local_root}")
 
-    for idx, key in enumerate(keys, start=1):
-        rel = key[len(base_prefix):] if base_prefix and key.startswith(base_prefix) else key
+    for _idx, key in enumerate(keys, start=1):
+        rel = key[len(base_prefix) :] if base_prefix and key.startswith(base_prefix) else key
         if not rel:
             continue
 
@@ -117,10 +118,8 @@ def sync_s3_prefix_to_directory(
         target.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Head first so we can log useful info (and catch 403 cleanly)
             head = client.head_object(Bucket=bucket, Key=key)
 
-            # Helpful debugging if this ends up being SSE-KMS
             sse = head.get("ServerSideEncryption")
             kms = head.get("SSEKMSKeyId")
             if sse == "aws:kms":

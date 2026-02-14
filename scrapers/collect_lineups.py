@@ -4,7 +4,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import pandas as pd
 
@@ -20,10 +20,6 @@ def append_csv(path: Path, df: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     header = not path.exists()
     df.to_csv(path, mode="a", header=header, index=False)
-
-
-def is_hard_block(status: int) -> bool:
-    return status == 403
 
 
 def looks_blocked(html_text: str) -> bool:
@@ -43,16 +39,16 @@ def get_schedules(indir, div, year):
     fpath = Path(indir) / f"d{div}_schedules_{year}.csv"
     if fpath.exists():
         df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
-        
+
         df = df.drop_duplicates(subset=["contest_id"])
         today_et = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
         df = df[pd.to_datetime(df["date"], errors="coerce") < today_et]
         return df
-        
+
     return pd.DataFrame()
 
 
-def _parse_team_header_text(card_header_el) -> Tuple[Optional[int], str]:
+def _parse_team_header_text(card_header_el) -> tuple[int | None, str]:
     a = card_header_el.query_selector("a[href*='/teams/']")
     team_id = None
     if a:
@@ -70,7 +66,7 @@ def _is_indented_sub(td_html: str) -> bool:
     return ("&nbsp;" in td_html) or ("\u00a0" in td_html)
 
 
-def _extract_player_link_data(name_td_el) -> Optional[Tuple[int, str]]:
+def _extract_player_link_data(name_td_el) -> tuple[int, str] | None:
     a = name_td_el.query_selector("a[href*='/players/']")
     if not a:
         return None
@@ -87,7 +83,20 @@ def _extract_player_link_data(name_td_el) -> Optional[Tuple[int, str]]:
 def _dedupe_hit(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
-    key = [c for c in ["division", "year", "contest_id", "team_id", "ncaa_id", "is_sub", "jersey", "position"] if c in df.columns]
+    key = [
+        c
+        for c in [
+            "division",
+            "year",
+            "contest_id",
+            "team_id",
+            "ncaa_id",
+            "is_sub",
+            "jersey",
+            "position",
+        ]
+        if c in df.columns
+    ]
     if not key:
         return df
     return df.drop_duplicates(subset=key, keep="last")
@@ -96,7 +105,11 @@ def _dedupe_hit(df: pd.DataFrame) -> pd.DataFrame:
 def _dedupe_pit(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
-    key = [c for c in ["division", "year", "contest_id", "team_id", "ncaa_id", "is_sub", "jersey"] if c in df.columns]
+    key = [
+        c
+        for c in ["division", "year", "contest_id", "team_id", "ncaa_id", "is_sub", "jersey"]
+        if c in df.columns
+    ]
     if not key:
         return df
     return df.drop_duplicates(subset=key, keep="last")
@@ -115,7 +128,7 @@ def _normalize_types(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _existing_contest_ids(path: Path) -> Set[int]:
+def _existing_contest_ids(path: Path) -> set[int]:
     if not path.exists():
         return set()
     try:
@@ -128,7 +141,9 @@ def _existing_contest_ids(path: Path) -> Set[int]:
         return set()
 
 
-def completed_game_ids_from_csv(hit_out: Path, pit_out: Path) -> Tuple[Set[int], Set[int], Set[int]]:
+def completed_game_ids_from_csv(
+    hit_out: Path, pit_out: Path
+) -> tuple[set[int], set[int], set[int]]:
     hit_done = _existing_contest_ids(hit_out)
     pit_done = _existing_contest_ids(pit_out)
     both_done = hit_done & pit_done
@@ -165,7 +180,7 @@ def scrape_game_lineups(
     contest_id: int,
     div: int,
     year: int,
-) -> Tuple[pd.DataFrame, pd.DataFrame, int, str]:
+) -> tuple[pd.DataFrame, pd.DataFrame, int, str]:
     url = f"{BASE}/contests/{contest_id}/individual_stats"
     html_content, status = session.fetch(url, wait_selector="div.card", wait_timeout=20000)
 
@@ -181,8 +196,8 @@ def scrape_game_lineups(
     if not cards:
         return pd.DataFrame(), pd.DataFrame(), status, html_content
 
-    hit_rows: List[Dict[str, Any]] = []
-    pit_rows: List[Dict[str, Any]] = []
+    hit_rows: list[dict[str, Any]] = []
+    pit_rows: list[dict[str, Any]] = []
 
     for card in cards:
         header = card.query_selector("div.card-header")
@@ -195,7 +210,7 @@ def scrape_game_lineups(
         header_lower = header_text.lower()
 
         is_hitting = ("hitting" in header_lower) or ("batting" in header_lower)
-        is_pitching = ("pitching" in header_lower)
+        is_pitching = "pitching" in header_lower
         if not (is_hitting or is_pitching):
             continue
 
@@ -271,7 +286,7 @@ def scrape_lineups(
     indir: str,
     outdir: str,
     year: int,
-    divisions: List[int],
+    divisions: list[int],
     missing_only: bool = False,
     batch_size: int = 25,
     base_delay: float = 10.0,
@@ -318,9 +333,7 @@ def scrape_lineups(
         print(
             f"\n=== d{job['div']} {year} lineups — total {job['total_games']} | done {job['both_done_count']} | remaining {job['remaining']} ==="
         )
-        print(
-            f"    (hit done: {job['hit_done_count']} | pit done: {job['pit_done_count']})"
-        )
+        print(f"    (hit done: {job['hit_done_count']} | pit done: {job['pit_done_count']})")
 
     if not any(job["remaining"] > 0 for job in division_jobs):
         print("[trace] collect_lineups: no remaining games, exiting", flush=True)
@@ -355,10 +368,12 @@ def scrape_lineups(
                         print("[budget] daily request budget exhausted, stopping")
                         break
 
-                    batch = games[batch_start:batch_start + batch_size]
+                    batch = games[batch_start : batch_start + batch_size]
                     batch_end = batch_start + len(batch)
 
-                    print(f"\n[batch] games {batch_start+1}-{batch_end} (budget: {session.requests_remaining})")
+                    print(
+                        f"\n[batch] games {batch_start + 1}-{batch_end} (budget: {session.requests_remaining})"
+                    )
 
                     hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
 
@@ -371,11 +386,9 @@ def scrape_lineups(
 
                         print(f"\n[game] {gid}")
 
-                        hit_df, pit_df, status, html_content = scrape_game_lineups(session, gid, div, year)
-
-                        if is_hard_block(status):
-                            print("[STOP] got 403 (hard block). Stopping for safety (CSV progress preserved).")
-                            return
+                        hit_df, pit_df, status, html_content = scrape_game_lineups(
+                            session, gid, div, year
+                        )
 
                         if status >= 400:
                             print(f"  failed: HTTP {status}")
@@ -399,7 +412,9 @@ def scrape_lineups(
                         if gid in hit_done and gid in pit_done:
                             both_done.add(gid)
 
-                        print(f"  ok: hit={wrote_hit} pit={wrote_pit} (budget: {session.requests_remaining})")
+                        print(
+                            f"  ok: hit={wrote_hit} pit={wrote_pit} (budget: {session.requests_remaining})"
+                        )
 
                     if batch_end < remaining:
                         cooldown = int(batch_cooldown_s)
@@ -420,7 +435,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--missing_only", action="store_true", help="Only scrape contests missing from both lineup outputs")
+    parser.add_argument(
+        "--missing_only",
+        action="store_true",
+        help="Only scrape contests missing from both lineup outputs",
+    )
     parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/lineups")
     parser.add_argument("--batch_size", type=int, default=25)

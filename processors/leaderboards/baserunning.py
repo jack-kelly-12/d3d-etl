@@ -35,8 +35,12 @@ def add_runner_dests(df: pd.DataFrame) -> pd.DataFrame:
             return 3
         return 0
 
-    df["r1_dest"] = [dest(r, a, b, c) for r, a, b, c in zip(df["r1_id"], r1n, r2n, r3n)]
-    df["r2_dest"] = [dest(r, a, b, c) for r, a, b, c in zip(df["r2_id"], r1n, r2n, r3n)]
+    df["r1_dest"] = [
+        dest(r, a, b, c) for r, a, b, c in zip(df["r1_id"], r1n, r2n, r3n, strict=False)
+    ]
+    df["r2_dest"] = [
+        dest(r, a, b, c) for r, a, b, c in zip(df["r2_id"], r1n, r2n, r3n, strict=False)
+    ]
     return df
 
 
@@ -191,13 +195,20 @@ def add_steal_rates(df: pd.DataFrame) -> pd.DataFrame:
 def calculate_wgdp(df: pd.DataFrame, group_col: str, id_col: str) -> pd.DataFrame:
     ob = pd.to_numeric(df["outs_before"], errors="coerce")
     opps = df[df["r1_id"].notna() & ob.lt(2)].copy()
-    is_gdp = opps["play_description"].fillna("").astype(str).str.contains("double play", case=False, na=False)
+    is_gdp = (
+        opps["play_description"]
+        .fillna("")
+        .astype(str)
+        .str.contains("double play", case=False, na=False)
+    )
 
     opp_counts = opps.groupby(group_col).size()
     gdp_counts = opps[is_gdp].groupby(group_col).size()
 
     out = (
-        pd.DataFrame({"gdp_opps": opp_counts, "gdp": gdp_counts.reindex(opp_counts.index, fill_value=0)})
+        pd.DataFrame(
+            {"gdp_opps": opp_counts, "gdp": gdp_counts.reindex(opp_counts.index, fill_value=0)}
+        )
         .reset_index()
         .rename(columns={group_col: id_col})
     )
@@ -307,7 +318,9 @@ def calculate_webt(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
         opp = r[f"opp_{t}"].to_numpy(dtype=float)
         taken = r[f"taken_{t}"].to_numpy(dtype=float)
         outc = r[f"out_{t}"].to_numpy(dtype=float)
-        webt += (taken - lg_rates[t]["taken"] * opp) + (outc - lg_rates[t]["out"] * opp) * (-runs_out)
+        webt += (taken - lg_rates[t]["taken"] * opp) + (outc - lg_rates[t]["out"] * opp) * (
+            -runs_out
+        )
 
     r["webt"] = webt
     r["ebt_opps"] = r["opp_13"] + r["opp_2h"] + r["opp_1h"]
@@ -358,12 +371,12 @@ def calculate_baserunning_stats(df: pd.DataFrame, weights: dict) -> pd.DataFrame
     name_map = (
         pd.concat(
             [
-                df.loc[df["r1_id"].notna(), ["r1_id", "r1_name", "bat_team_id", "bat_team_name"]].rename(
-                    columns={"r1_id": "player_id", "r1_name": "player_name"}
-                ),
-                df.loc[df["r2_id"].notna(), ["r2_id", "r2_name", "bat_team_id", "bat_team_name"]].rename(
-                    columns={"r2_id": "player_id", "r2_name": "player_name"}
-                ),
+                df.loc[
+                    df["r1_id"].notna(), ["r1_id", "r1_name", "bat_team_id", "bat_team_name"]
+                ].rename(columns={"r1_id": "player_id", "r1_name": "player_name"}),
+                df.loc[
+                    df["r2_id"].notna(), ["r2_id", "r2_name", "bat_team_id", "bat_team_name"]
+                ].rename(columns={"r2_id": "player_id", "r2_name": "player_name"}),
             ],
             ignore_index=True,
         )
@@ -468,18 +481,26 @@ def calculate_team_baserunning(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
     wgdp = calculate_wgdp(df, "bat_team_id", "team_id")
 
     webt_player = calculate_webt(df, weights)
-    runner_to_team = pd.concat(
-        [
-            df.loc[df["r1_id"].notna(), ["r1_id", "bat_team_id"]].rename(columns={"r1_id": "player_id"}),
-            df.loc[df["r2_id"].notna(), ["r2_id", "bat_team_id"]].rename(
-                columns={"r2_id": "player_id"}
-            ),
-        ],
-        ignore_index=True,
-    ).dropna(subset=["player_id"]).drop_duplicates(subset=["player_id"])
+    runner_to_team = (
+        pd.concat(
+            [
+                df.loc[df["r1_id"].notna(), ["r1_id", "bat_team_id"]].rename(
+                    columns={"r1_id": "player_id"}
+                ),
+                df.loc[df["r2_id"].notna(), ["r2_id", "bat_team_id"]].rename(
+                    columns={"r2_id": "player_id"}
+                ),
+            ],
+            ignore_index=True,
+        )
+        .dropna(subset=["player_id"])
+        .drop_duplicates(subset=["player_id"])
+    )
 
     webt_team = (
-        webt_player.merge(runner_to_team.rename(columns={"bat_team_id": "team_id"}), on="player_id", how="left")
+        webt_player.merge(
+            runner_to_team.rename(columns={"bat_team_id": "team_id"}), on="player_id", how="left"
+        )
         .groupby("team_id", dropna=False)
         .agg(
             webt=("webt", "sum"),

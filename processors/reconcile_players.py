@@ -7,7 +7,9 @@ from urllib.parse import urlparse
 import pandas as pd
 from rapidfuzz import fuzz, process
 
-_MISSING = {"", "-", "—", "–", "na", "n/a", "none", "null", "nan"}
+from processors.logging_utils import division_year_label, get_logger
+
+logger = get_logger(__name__)
 
 
 def _s(x) -> str:
@@ -16,13 +18,8 @@ def _s(x) -> str:
     return str(x)
 
 
-def is_missing(x) -> bool:
-    s = _s(x).strip().lower()
-    return s in _MISSING
-
-
-def norm_missing(x) -> str:
-    return "" if is_missing(x) else _s(x).strip()
+def norm(x) -> str:
+    return _s(x).strip()
 
 
 def clean_name(name: str) -> str:
@@ -35,7 +32,7 @@ def clean_name(name: str) -> str:
 
 
 def clean_high_school(x: str) -> str:
-    s = norm_missing(x)
+    s = norm(x)
     if not s:
         return ""
 
@@ -55,6 +52,7 @@ def clean_high_school(x: str) -> str:
     s = re.sub(r"\s+", " ", s).strip(" \t\r\n-–—:;|,")
     return s
 
+
 def normalize_name(name: str) -> str:
     s = _s(name)
     s = re.sub(r"^\s*\d{1,3}\s*", "", s)
@@ -72,7 +70,7 @@ def get_base_url(url: str) -> str:
 
 def normalize_b_t(bt: str) -> str:
     s = unicodedata.normalize("NFKC", _s(bt)).upper().strip()
-    if not s or is_missing(s):
+    if not s:
         return ""
 
     s = s.replace("\\", "/").replace("|", "/")
@@ -126,7 +124,7 @@ _POS_MAP = {
 
 def standardize_pos(pos: str) -> str:
     s = unicodedata.normalize("NFKC", _s(pos)).upper().strip()
-    if not s or is_missing(s):
+    if not s:
         return ""
     s = re.sub(r"[.\s]+", " ", s).strip()
 
@@ -152,16 +150,19 @@ def load_rosters(data_dir: Path, year: int, division: int) -> pd.DataFrame:
     rosters = pd.read_csv(roster_path)
 
     rosters["player_name_norm"] = rosters["player_name"].map(normalize_name)
-    rosters["b_t"] = (rosters["bats"].map(lambda x: _s(x).upper()[:1]) + "/" + rosters["throws"].map(lambda x: _s(x).upper()[:1]))
+    rosters["b_t"] = (
+        rosters["bats"].map(lambda x: _s(x).upper()[:1])
+        + "/"
+        + rosters["throws"].map(lambda x: _s(x).upper()[:1])
+    )
     rosters["b_t"] = rosters["b_t"].map(normalize_b_t)
     rosters["pos"] = rosters["position"].map(standardize_pos)
 
-    # normalize placeholders
-    rosters["img_url"] = rosters["img_url"].map(norm_missing)
-    rosters["hometown"] = rosters["hometown"].map(norm_missing)
+    rosters["img_url"] = rosters["img_url"].map(norm)
+    rosters["hometown"] = rosters["hometown"].map(norm)
     rosters["high_school"] = rosters["high_school"].map(clean_high_school)
-    rosters["height"] = rosters["height"].map(norm_missing)
-    rosters["weight"] = rosters["weight"].map(norm_missing)
+    rosters["height"] = rosters["height"].map(norm)
+    rosters["weight"] = rosters["weight"].map(norm)
 
     return rosters
 
@@ -171,8 +172,20 @@ def load_headshots(data_dir: Path, year: int) -> pd.DataFrame:
     if not hfiles:
         return pd.DataFrame(
             columns=[
-                "team", "year", "roster_url", "name", "number", "position", "height", "weight",
-                "class", "b_t", "hometown", "highschool", "previous_school", "img_url"
+                "team",
+                "year",
+                "roster_url",
+                "name",
+                "number",
+                "position",
+                "height",
+                "weight",
+                "class",
+                "b_t",
+                "hometown",
+                "highschool",
+                "previous_school",
+                "img_url",
             ]
         )
 
@@ -199,25 +212,46 @@ def load_headshots(data_dir: Path, year: int) -> pd.DataFrame:
     tr["name_clean"] = tr["name"].map(clean_name)
     tr["tr_name_norm"] = tr["name_clean"].map(normalize_name)
 
-    tr["img_url"] = tr["img_url"].map(norm_missing)
+    tr["img_url"] = tr["img_url"].map(norm)
     tr["b_t"] = tr["b_t"].map(normalize_b_t)
     tr["pos"] = tr["position"].map(standardize_pos)
-    tr["hometown"] = tr["hometown"].map(norm_missing)
+    tr["hometown"] = tr["hometown"].map(norm)
     tr["high_school"] = tr["highschool"].map(clean_high_school)
-    tr["height"] = tr["height"].map(norm_missing)
-    tr["weight"] = tr["weight"].map(norm_missing)
+    tr["height"] = tr["height"].map(norm)
+    tr["weight"] = tr["weight"].map(norm)
 
     return tr
 
 
 def build_headshot_matches(rosters: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
     if rosters.empty or tr.empty:
-        return pd.DataFrame(columns=["player_id", "img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"])
+        return pd.DataFrame(
+            columns=[
+                "player_id",
+                "img_url",
+                "b_t",
+                "hometown",
+                "high_school",
+                "height",
+                "weight",
+                "pos",
+            ]
+        )
 
-    # only keep rows that actually have an image URL (treat '-' as missing)
-    tr = tr[tr["img_url"].map(lambda x: not is_missing(x))].copy()
+    tr = tr[tr["img_url"]].copy()
     if tr.empty:
-        return pd.DataFrame(columns=["player_id", "img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"])
+        return pd.DataFrame(
+            columns=[
+                "player_id",
+                "img_url",
+                "b_t",
+                "hometown",
+                "high_school",
+                "height",
+                "weight",
+                "pos",
+            ]
+        )
 
     ros_players = rosters[["player_id", "player_name_norm", "number", "team_name"]].copy()
     ros_players["number"] = ros_players["number"].astype(str).str.strip()
@@ -236,7 +270,7 @@ def build_headshot_matches(rosters: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFr
                 continue
 
             img_url = _s(tr_row["img_url"]).strip()
-            if is_missing(img_url):
+            if not img_url:
                 continue
 
             base = get_base_url(tr_row["roster_url"])
@@ -274,7 +308,19 @@ def build_headshot_matches(rosters: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFr
                 )
             )
 
-    out = pd.DataFrame(matches, columns=["player_id", "img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"])
+    out = pd.DataFrame(
+        matches,
+        columns=[
+            "player_id",
+            "img_url",
+            "b_t",
+            "hometown",
+            "high_school",
+            "height",
+            "weight",
+            "pos",
+        ],
+    )
     out = out.drop_duplicates(subset=["player_id"], keep="first")
     return out
 
@@ -284,9 +330,9 @@ def enrich_rosters_with_headshots(rosters: pd.DataFrame, hs: pd.DataFrame) -> pd
 
     def take(roster_col: str) -> None:
         hs_col = f"{roster_col}_hs"
-        merged[roster_col] = merged[roster_col].map(norm_missing)
-        merged[hs_col] = merged[hs_col].map(norm_missing)
-        merged[roster_col] = merged[roster_col].where(~merged[roster_col].map(is_missing), merged[hs_col])
+        merged[roster_col] = merged[roster_col].map(norm)
+        merged[hs_col] = merged[hs_col].map(norm)
+        merged[roster_col] = merged[roster_col].where(~merged[roster_col], merged[hs_col])
 
     for col in ["img_url", "b_t", "hometown", "high_school", "height", "weight", "pos"]:
         take(col)
@@ -294,7 +340,7 @@ def enrich_rosters_with_headshots(rosters: pd.DataFrame, hs: pd.DataFrame) -> pd
     merged = merged.drop(columns=[c for c in merged.columns if c.endswith("_hs")], errors="ignore")
     merged["b_t"] = merged["b_t"].map(normalize_b_t)
     merged["pos"] = merged["pos"].map(standardize_pos)
-    merged["img_url"] = merged["img_url"].map(norm_missing)
+    merged["img_url"] = merged["img_url"].map(norm)
 
     return merged
 
@@ -306,7 +352,7 @@ def main(data_dir: str, year: int):
     for division in (1, 2, 3):
         roster_path = data_dir / "rosters" / f"d{division}_rosters_{year}.csv"
         if not roster_path.exists():
-            print(f"No roster file for d{division} {year}, skipping")
+            logger.warning("No roster file for %s, skipping", division_year_label(division, year))
             continue
 
         rosters = load_rosters(data_dir, year, division)
@@ -319,7 +365,7 @@ def main(data_dir: str, year: int):
 
         outpath = data_dir / "rosters" / f"d{division}_rosters_{year}.csv"
         enriched.to_csv(outpath, index=False)
-        print(f"wrote {outpath}")
+        logger.info("wrote %s", outpath)
 
 
 if __name__ == "__main__":

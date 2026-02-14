@@ -9,10 +9,10 @@ def safe_divide(num, denom, fill=0.0):
 def ip_to_float(ip_str) -> float:
     try:
         ip = str(ip_str)
-        if '.' not in ip:
+        if "." not in ip:
             return float(ip)
-        whole, partial = ip.split('.')
-        thirds = {0: 0, 1: 1/3, 2: 2/3}.get(int(partial), 0)
+        whole, partial = ip.split(".")
+        thirds = {0: 0, 1: 1 / 3, 2: 2 / 3}.get(int(partial), 0)
         return int(whole) + thirds
     except (ValueError, TypeError):
         return 0.0
@@ -35,19 +35,21 @@ def float_to_ip(decimal_ip: float) -> float:
     return float(f"{whole}.{partial}")
 
 
-def aggregate_team(df: pd.DataFrame, sum_cols: list[str], first_cols: list[str] = None) -> pd.DataFrame:
+def aggregate_team(
+    df: pd.DataFrame, sum_cols: list[str], first_cols: list[str] = None
+) -> pd.DataFrame:
     if first_cols is None:
-        first_cols = ['conference', 'team_id']
+        first_cols = ["conference", "team_id"]
 
     agg = {}
     for col in sum_cols:
         if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
-            agg[col] = 'sum'
+            agg[col] = "sum"
     for col in first_cols:
         if col in df.columns:
-            agg[col] = 'first'
+            agg[col] = "first"
 
-    return df.groupby('team_name').agg(agg).reset_index()
+    return df.groupby("team_name").agg(agg).reset_index()
 
 
 def fill_missing(df: pd.DataFrame, cols: list[str], fill_value=0) -> pd.DataFrame:

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from processors.logging_utils import division_year_label, get_logger
 from processors.war_calculation.batting import calculate_batting_war, calculate_team_batting
 from processors.war_calculation.constants import (
     BAT_STAT_COLUMNS,
@@ -13,6 +14,8 @@ from processors.war_calculation.constants import (
 )
 from processors.war_calculation.pitching import calculate_pitching_war, calculate_team_pitching
 from processors.war_calculation.sos_utils import normalize_division_war, sos_reward_punish
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -26,20 +29,20 @@ class DivisionData:
 
 
 def load_stats(data_dir: Path, division: int, year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    batting = pd.read_csv(data_dir / f'stats/d{division}_batting_{year}.csv')
-    pitching = pd.read_csv(data_dir / f'stats/d{division}_pitching_{year}.csv')
+    batting = pd.read_csv(data_dir / f"stats/d{division}_batting_{year}.csv")
+    pitching = pd.read_csv(data_dir / f"stats/d{division}_pitching_{year}.csv")
 
     roster = pd.read_csv(
-                data_dir / f'rosters/d{division}_rosters_{year}.csv',
-        dtype={'player_id': str, 'ncaa_id': 'Int64'}
-            )
-    roster = roster[(roster['year'] == year) & (roster['division'] == division)]
+        data_dir / f"rosters/d{division}_rosters_{year}.csv",
+        dtype={"player_id": str, "ncaa_id": "Int64"},
+    )
+    roster = roster[(roster["year"] == year) & (roster["division"] == division)]
 
-    batting['ncaa_id'] = batting['ncaa_id'].astype('Int64')
-    pitching['ncaa_id'] = pitching['ncaa_id'].astype('Int64')
+    batting["ncaa_id"] = batting["ncaa_id"].astype("Int64")
+    pitching["ncaa_id"] = pitching["ncaa_id"].astype("Int64")
 
-    batting = batting.merge(roster[['ncaa_id', 'player_id']], on='ncaa_id', how='left')
-    pitching = pitching.merge(roster[['ncaa_id', 'player_id']], on='ncaa_id', how='left')
+    batting = batting.merge(roster[["ncaa_id", "player_id"]], on="ncaa_id", how="left")
+    pitching = pitching.merge(roster[["ncaa_id", "player_id"]], on="ncaa_id", how="left")
 
     batting[BAT_STAT_COLUMNS] = batting[BAT_STAT_COLUMNS].fillna(0)
     pitching[PITCH_STAT_COLUMNS] = pitching[PITCH_STAT_COLUMNS].fillna(0)
@@ -49,22 +52,22 @@ def load_stats(data_dir: Path, division: int, year: int) -> tuple[pd.DataFrame, 
 
 def load_pbp(data_dir: Path, division: int, year: int) -> pd.DataFrame:
     return pd.read_csv(
-            data_dir / f'pbp/d{division}_pbp_with_metrics_{year}.csv',
-        dtype={'player_id': str, 'pitcher_id': str, 'batter_id': str},
-        low_memory=False
-        )
+        data_dir / f"pbp/d{division}_pbp_with_metrics_{year}.csv",
+        dtype={"player_id": str, "pitcher_id": str, "batter_id": str},
+        low_memory=False,
+    )
 
 
 def load_rankings(data_dir: Path, division: int, year: int) -> pd.DataFrame:
-    rankings = pd.read_csv(data_dir / f'rankings/d{division}_rankings_{year}.csv')
-    rankings['year'] = year
-    rankings['division'] = division
+    rankings = pd.read_csv(data_dir / f"rankings/d{division}_rankings_{year}.csv")
+    rankings["year"] = year
+    rankings["division"] = division
 
-    record_parts = rankings['record'].str.split('-', expand=True)
-    rankings['wins'] = record_parts[0].astype(int)
-    rankings['losses'] = record_parts[1].astype(int)
-    rankings['ties'] = record_parts[2].fillna(0).astype(int) if record_parts.shape[1] > 2 else 0
-    rankings['games'] = rankings['wins'] + rankings['losses'] + rankings['ties']
+    record_parts = rankings["record"].str.split("-", expand=True)
+    rankings["wins"] = record_parts[0].astype(int)
+    rankings["losses"] = record_parts[1].astype(int)
+    rankings["ties"] = record_parts[2].fillna(0).astype(int) if record_parts.shape[1] > 2 else 0
+    rankings["games"] = rankings["wins"] + rankings["losses"] + rankings["ties"]
 
     return rankings
 
@@ -72,8 +75,8 @@ def load_rankings(data_dir: Path, division: int, year: int) -> pd.DataFrame:
 def load_division_data(data_dir: Path, division: int, year: int) -> DivisionData:
     batting, pitching = load_stats(data_dir, division, year)
 
-    guts = pd.read_csv(data_dir / 'guts/guts_constants.csv')
-    guts = guts[(guts['division'] == division) & (guts['year'] == int(year))]
+    guts = pd.read_csv(data_dir / "guts/guts_constants.csv")
+    guts = guts[(guts["division"] == division) & (guts["year"] == int(year))]
 
     if guts.empty:
         raise ValueError(f"No GUTS constants for D{division} {year}")
@@ -83,7 +86,7 @@ def load_division_data(data_dir: Path, division: int, year: int) -> DivisionData
         pitching=pitching,
         pbp=load_pbp(data_dir, division, year),
         guts=guts,
-        park_factors=pd.read_csv(data_dir / f'park_factors/d{division}_park_factors.csv'),
+        park_factors=pd.read_csv(data_dir / f"park_factors/d{division}_park_factors.csv"),
         rankings=load_rankings(data_dir, division, year),
     )
 
@@ -93,29 +96,36 @@ def filter_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 
 
 def process_division(
-    data: DivisionData,
-    mappings: pd.DataFrame,
-    division: int,
-    year: int
+    data: DivisionData, mappings: pd.DataFrame, division: int, year: int
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     batting_war, team_batting_clutch = calculate_batting_war(
         data.batting, data.guts, data.park_factors, data.pbp, division, year
     )
 
     pitching_war, team_pitching_clutch = calculate_pitching_war(
-        data.pitching, data.pbp, data.park_factors, data.guts,
-        bat_war_total=batting_war['war'].sum(),
-        year=year, division=division
+        data.pitching,
+        data.pbp,
+        data.park_factors,
+        data.guts,
+        bat_war_total=batting_war["war"].sum(),
+        year=year,
+        division=division,
     )
-
 
     batting_war, pitching_war, missing = sos_reward_punish(
-        batting_war, pitching_war, data.rankings, mappings,
-        division, year, alpha=0.2, clip_sd=3,
-        group_keys=('year', 'division'), harder_if='higher'
+        batting_war,
+        pitching_war,
+        data.rankings,
+        mappings,
+        division,
+        year,
+        alpha=0.2,
+        clip_sd=3,
+        group_keys=("year", "division"),
+        harder_if="higher",
     )
     if missing:
-        print(f"  SoS missing for {len(missing)} teams")
+        logger.info("  SoS missing for %s teams", len(missing))
 
     batting_team = calculate_team_batting(
         batting_war, data.guts, data.park_factors, team_batting_clutch, division, year
@@ -138,13 +148,15 @@ def save_war_files(
     batting_war: pd.DataFrame,
     pitching_war: pd.DataFrame,
     batting_team: pd.DataFrame,
-    pitching_team: pd.DataFrame
+    pitching_team: pd.DataFrame,
 ):
     files = {
-        f'd{division}_batting_war_{year}.csv': filter_columns(batting_war, batting_columns),
-        f'd{division}_pitching_war_{year}.csv': filter_columns(pitching_war, pitching_columns),
-        f'd{division}_batting_team_war_{year}.csv': filter_columns(batting_team, batting_columns),
-        f'd{division}_pitching_team_war_{year}.csv': filter_columns(pitching_team, pitching_columns),
+        f"d{division}_batting_war_{year}.csv": filter_columns(batting_war, batting_columns),
+        f"d{division}_pitching_war_{year}.csv": filter_columns(pitching_war, pitching_columns),
+        f"d{division}_batting_team_war_{year}.csv": filter_columns(batting_team, batting_columns),
+        f"d{division}_pitching_team_war_{year}.csv": filter_columns(
+            pitching_team, pitching_columns
+        ),
     }
 
     for filename, df in files.items():
@@ -155,21 +167,21 @@ def calculate_war(data_dir: Path, year: int, divisions: list[int] = None):
     if divisions is None:
         divisions = [1, 2, 3]
 
-    war_dir = data_dir / 'war'
+    war_dir = data_dir / "war"
     war_dir.mkdir(exist_ok=True)
 
-    mappings = pd.read_csv(data_dir / 'team_mappings.csv')
+    mappings = pd.read_csv(data_dir / "team_mappings.csv")
 
     for division in divisions:
-        print(f"Processing D{division} {year}...")
+        logger.info("Processing %s...", division_year_label(division, year))
 
         try:
             data = load_division_data(data_dir, division, year)
         except FileNotFoundError as e:
-            print(f"  Skipping: {e}")
+            logger.warning("  Skipping: %s", e)
             continue
         except ValueError as e:
-            print(f"  Skipping: {e}")
+            logger.warning("  Skipping: %s", e)
             continue
 
         batting_war, pitching_war, batting_team, pitching_team = process_division(
@@ -177,16 +189,15 @@ def calculate_war(data_dir: Path, year: int, divisions: list[int] = None):
         )
 
         save_war_files(
-            war_dir, division, year,
-            batting_war, pitching_war, batting_team, pitching_team
+            war_dir, division, year, batting_war, pitching_war, batting_team, pitching_team
         )
 
         standings = data.rankings
-        target = standings['wins'].sum() - REP_WP * standings['games'].sum()
-        actual = batting_war['war'].sum() + pitching_war['war'].sum()
-        print(f"  Target WAR: {target:.1f} | Actual: {actual:.1f}")
+        target = standings["wins"].sum() - REP_WP * standings["games"].sum()
+        actual = batting_war["war"].sum() + pitching_war["war"].sum()
+        logger.info("  Target WAR: %.1f | Actual: %.1f", target, actual)
 
-    print("Done!")
+    logger.info("Done!")
 
 
 def main(data_dir: str, year: int, divisions: list[int] = None):
@@ -197,12 +208,13 @@ def main(data_dir: str, year: int, divisions: list[int] = None):
     calculate_war(data_dir, year, divisions)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', required=True)
-    parser.add_argument('--year', type=int, required=True)
-    parser.add_argument('--divisions', nargs='+', type=int, default=[1, 2, 3])
+    parser.add_argument("--data_dir", required=True)
+    parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
     args = parser.parse_args()
 
     main(args.data_dir, args.year, args.divisions)

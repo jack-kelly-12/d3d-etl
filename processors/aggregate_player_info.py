@@ -2,14 +2,16 @@ from pathlib import Path
 
 import pandas as pd
 
-INVALID_STRS = {"", "-", "nan", "none", "null"}
+from processors.logging_utils import get_logger
+
 SOURCE_PRIORITY = {"roster": 0, "batting_war": 1, "pitching_war": 2}
+logger = get_logger(__name__)
 
 
 def is_valid(val) -> bool:
     if pd.isna(val):
         return False
-    return str(val).strip().lower() not in INVALID_STRS
+    return str(val).strip().lower()
 
 
 def clean_str(val) -> str:
@@ -38,7 +40,9 @@ def first_valid(series: pd.Series) -> str:
     return ""
 
 
-def roster_paths(data_dir: Path, divisions: list[int], years: list[int]) -> list[tuple[int, int, Path]]:
+def roster_paths(
+    data_dir: Path, divisions: list[int], years: list[int]
+) -> list[tuple[int, int, Path]]:
     paths = []
     for division in divisions:
         for year in years:
@@ -48,7 +52,9 @@ def roster_paths(data_dir: Path, divisions: list[int], years: list[int]) -> list
     return paths
 
 
-def war_paths(data_dir: Path, divisions: list[int], years: list[int], war_type: str) -> list[tuple[int, int, Path]]:
+def war_paths(
+    data_dir: Path, divisions: list[int], years: list[int], war_type: str
+) -> list[tuple[int, int, Path]]:
     paths = []
     for division in divisions:
         for year in years:
@@ -79,7 +85,9 @@ def load_rows(path: Path, source: str, division: int, year: int) -> pd.DataFrame
     return out
 
 
-def load_sources(data_dir: Path, divisions: list[int], years: list[int]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_sources(
+    data_dir: Path, divisions: list[int], years: list[int]
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     roster_rows = []
     batting_war_rows = []
     pitching_war_rows = []
@@ -92,8 +100,12 @@ def load_sources(data_dir: Path, divisions: list[int], years: list[int]) -> tupl
         pitching_war_rows.append(load_rows(path, "pitching_war", division, year))
 
     rosters = pd.concat(roster_rows, ignore_index=True) if roster_rows else pd.DataFrame()
-    batting_war = pd.concat(batting_war_rows, ignore_index=True) if batting_war_rows else pd.DataFrame()
-    pitching_war = pd.concat(pitching_war_rows, ignore_index=True) if pitching_war_rows else pd.DataFrame()
+    batting_war = (
+        pd.concat(batting_war_rows, ignore_index=True) if batting_war_rows else pd.DataFrame()
+    )
+    pitching_war = (
+        pd.concat(pitching_war_rows, ignore_index=True) if pitching_war_rows else pd.DataFrame()
+    )
     return rosters, batting_war, pitching_war
 
 
@@ -115,16 +127,13 @@ def aggregate_players(data_dir: Path, divisions: list[int], years: list[int]) ->
 
     all_rows = all_rows.sort_values(["source_priority", "year"], ascending=[True, False])
 
-    result = (
-        all_rows.groupby("player_id", as_index=False)
-        .agg(
-            {
-                "player_name": first_valid,
-                "team_name": first_valid,
-                "bats": first_valid,
-                "throws": first_valid,
-            }
-        )
+    result = all_rows.groupby("player_id", as_index=False).agg(
+        {
+            "player_name": first_valid,
+            "team_name": first_valid,
+            "bats": first_valid,
+            "throws": first_valid,
+        }
     )
     result["bats"] = result["bats"].map(standardize_hand)
     result["throws"] = result["throws"].map(standardize_hand)
@@ -154,27 +163,33 @@ def fill_missing_from_info(df: pd.DataFrame, info: pd.DataFrame, key: str) -> pd
     merged["throws__info"] = merged["throws__info"].map(standardize_hand)
 
     merged["bats"] = merged["bats"].where(merged["bats"].map(is_valid), merged["bats__info"])
-    merged["throws"] = merged["throws"].where(merged["throws"].map(is_valid), merged["throws__info"])
+    merged["throws"] = merged["throws"].where(
+        merged["throws"].map(is_valid), merged["throws__info"]
+    )
     return merged.drop(columns=["bats__info", "throws__info"], errors="ignore")
 
 
-def merge_to_rosters(data_dir: Path, player_info: pd.DataFrame, divisions: list[int], years: list[int]) -> None:
+def merge_to_rosters(
+    data_dir: Path, player_info: pd.DataFrame, divisions: list[int], years: list[int]
+) -> None:
     info = player_info[["player_id", "bats", "throws"]].copy()
     for _, _, path in roster_paths(data_dir, divisions, years):
         roster = pd.read_csv(path, dtype={"player_id": str}, low_memory=False)
         merged = fill_missing_from_info(roster, info, key="player_id")
         merged.to_csv(path, index=False)
-        print(f"Updated {path}")
+        logger.info("Updated %s", path)
 
 
-def merge_to_war(data_dir: Path, player_info: pd.DataFrame, divisions: list[int], years: list[int]) -> None:
+def merge_to_war(
+    data_dir: Path, player_info: pd.DataFrame, divisions: list[int], years: list[int]
+) -> None:
     info = player_info[["player_id", "bats", "throws"]].copy()
     for suffix in ("batting", "pitching"):
         for _, _, path in war_paths(data_dir, divisions, years, suffix):
             war = pd.read_csv(path, dtype={"player_id": str}, low_memory=False)
             merged = fill_missing_from_info(war, info, key="player_id")
             merged.to_csv(path, index=False)
-            print(f"Updated {path}")
+            logger.info("Updated %s", path)
 
 
 def main(data_dir: str, divisions: list[int] | None = None, years: list[int] | None = None) -> None:
@@ -191,17 +206,17 @@ def main(data_dir: str, divisions: list[int] | None = None, years: list[int] | N
 
     player_info = aggregate_players(data_dir_path, divisions, years)
     if player_info.empty:
-        print("No player data found.")
+        logger.info("No player data found.")
         return
 
     output_path = data_dir_path / "rosters" / "player_information.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     player_info.to_csv(output_path, index=False)
-    print(f"Saved {len(player_info)} players to {output_path}")
+    logger.info("Saved %s players to %s", len(player_info), output_path)
 
     merge_to_rosters(data_dir_path, player_info, divisions, years)
     merge_to_war(data_dir_path, player_info, divisions, years)
-    print("Done!")
+    logger.info("Done!")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,9 @@ _STRUCK_OUT = r"str(?:uck|ikes) out"
 _INFIELD_FLY = r"infield fly"
 
 # All batter out verbs combined
-_BATTER_OUT_VERBS = f"(?:{_GROUNDED_OUT}|{_FLIED_OUT}|{_LINED_OUT}|{_POPPED_OUT}|{_FOULED_OUT}|{_INFIELD_FLY})"
+_BATTER_OUT_VERBS = (
+    f"(?:{_GROUNDED_OUT}|{_FLIED_OUT}|{_LINED_OUT}|{_POPPED_OUT}|{_FOULED_OUT}|{_INFIELD_FLY})"
+)
 
 # Hit/reach verbs (past tense primary, but include present for some)
 _SINGLED = r"singled"
@@ -63,7 +65,7 @@ RX_K_SAFE = re.compile(
     r"wild pitch|passed ball|dropped 3rd strike|dropped third strike|"
     r"fielder'?s choice|error\(|\bE\d\b|bobble|advanced on"
     r")\b",
-    re.I
+    re.I,
 )
 RX_K_WP = re.compile(rf"\b{_STRUCK_OUT}\b.*\bwild pitch\b", re.I)
 RX_K_PB = re.compile(rf"\b{_STRUCK_OUT}\b.*\bpassed ball\b", re.I)
@@ -96,9 +98,13 @@ RX_REACH = RX_REACHED  # alias
 RX_FC = re.compile(r"\bfielder'?s choice\b", re.I)
 
 # Runner outs
-RX_RUNNER_OUT = re.compile(rf"\b(?:{_OUT_AT_BASE}|{_PICKED_OFF}|{_CAUGHT_STEALING}|{_OUT_ON_PLAY})\b", re.I)
+RX_RUNNER_OUT = re.compile(
+    rf"\b(?:{_OUT_AT_BASE}|{_PICKED_OFF}|{_CAUGHT_STEALING}|{_OUT_ON_PLAY})\b", re.I
+)
 RX_STOLEN_BASE = re.compile(rf"\b{_STOLE}\s+(?:second|third|home)\b", re.I)
-RX_CAUGHT_STEALING = re.compile(rf"\b(?:{_CAUGHT_STEALING}|out at (?:second|third|home)\s+c\s+to)\b", re.I)
+RX_CAUGHT_STEALING = re.compile(
+    rf"\b(?:{_CAUGHT_STEALING}|out at (?:second|third|home)\s+c\s+to)\b", re.I
+)
 RX_PICKOFF = re.compile(rf"\b{_PICKED_OFF}\b", re.I)
 RX_PICKOFF_ERROR = re.compile(rf"\b{_PICKED_OFF}\b.*\b(?:error|E\d)\b", re.I)
 
@@ -107,7 +113,10 @@ RX_ADVANCE = re.compile(rf"\b{_ADVANCED}\b", re.I)
 RX_TO_2 = re.compile(rf"\b(?:{_ADVANCED}|{_STOLE})\s+to\s+second\b|\bstole second\b", re.I)
 RX_TO_3 = re.compile(rf"\b(?:{_ADVANCED}|{_STOLE})\s+to\s+third\b|\bstole third\b", re.I)
 RX_TO_H = re.compile(rf"\b(?:{_ADVANCED})\s+to\s+home\b|\bstole home\b|\b{_SCORED}\b", re.I)
-RX_OUT = re.compile(rf"\b(?:{_OUT_AT_BASE}|out at second|out at third|out at home|{_PICKED_OFF}|{_CAUGHT_STEALING}|{_TAGGED_OUT})\b", re.I)
+RX_OUT = re.compile(
+    rf"\b(?:{_OUT_AT_BASE}|out at second|out at third|out at home|{_PICKED_OFF}|{_CAUGHT_STEALING}|{_TAGGED_OUT})\b",
+    re.I,
+)
 
 # Pitcher/catcher events
 RX_WILD_PITCH = re.compile(r"\bwild pitch\b", re.I)
@@ -128,10 +137,12 @@ RX_NO_PLAY = re.compile(
     r"\b(?:no play|halted|delay|postponed|ejected|suspended|coach visit|mound visit|"
     r"timeout|injury|review|challenged|overturned|confirmed|stands|sunny|rain|"
     r"hitting out of turn)\b",
-    re.I
+    re.I,
 )
 RX_LINEUP_CHANGE = re.compile(r"^\s*(?:lineup changed|pinch (?:hit|ran)|to\s+\w+\s+for)\b", re.I)
-RX_SUB_LINE = re.compile(r"^\s*(?:lineup changed:\s*)?.*?\b(?:in for|to\b.*\bfor\b|pinch (?:hit|ran) for)\b", re.I)
+RX_SUB_LINE = re.compile(
+    r"^\s*(?:lineup changed:\s*)?.*?\b(?:in for|to\b.*\bfor\b|pinch (?:hit|ran) for)\b", re.I
+)
 
 # =============================================================================
 # COMPOSITE PATTERNS - For classification and name extraction
@@ -140,7 +151,7 @@ RX_SUB_LINE = re.compile(r"^\s*(?:lineup changed:\s*)?.*?\b(?:in for|to\b.*\bfor
 # All batter action verbs (for detecting batter-focused plays)
 RX_BATTER_VERBS = re.compile(
     rf"\b(?:{_BATTER_REACH_VERBS}|{_STRUCK_OUT}|{_BATTER_OUT_VERBS}|{_IBB}|fouled into double play|pinch hit)\b",
-    re.I
+    re.I,
 )
 
 # All runner-only verbs (plays where p1 is about a runner, not the batter)
@@ -149,7 +160,7 @@ RX_RUNNER_ONLY_VERBS = re.compile(rf"\b{_RUNNER_ACTION_VERBS}\b", re.I)
 # Combined verb for detecting any play action
 RX_PLAY_VERB = re.compile(
     rf"\b(?:{_BATTER_REACH_VERBS}|{_STRUCK_OUT}|{_BATTER_OUT_VERBS}|{_RUNNER_ACTION_VERBS}|double play|triple play)\b",
-    re.I
+    re.I,
 )
 
 # Batter out shorthand (for helpers - K or fielded out)
@@ -162,19 +173,19 @@ RX_BAT_OUT = re.compile(rf"\b(?:{_STRUCK_OUT}|{_BATTER_OUT_VERBS})\b", re.I)
 # Extract batter name from p1_text
 RX_BATTER_NAME = re.compile(
     rf"^\s*(?P<name>.+?)\s+(?:{_BATTER_REACH_VERBS}|{_STRUCK_OUT}|{_GROUNDED_OUT}|grounded|{_FLIED_OUT}|flied|{_LINED_OUT}|lined|{_POPPED_OUT}|popped|{_FOULED_OUT}|{_INFIELD_FLY}|out)\b",
-    re.I
+    re.I,
 )
 
 # Extract runner name from p2/p3/p4 text
 RX_RUNNER_NAME = re.compile(
     rf"^\s*(?P<name>.+?)\s+(?:{_ADVANCED}|{_STOLE}|{_SCORED}|out|{_PICKED_OFF}|{_CAUGHT_STEALING})\b",
-    re.I
+    re.I,
 )
 
 # Extract runner name from p1_text (when p1 is a runner event)
 RX_RUNNER_P1_NAME = re.compile(
     rf"^\s*(?P<name>.+?)\s+(?:{_ADVANCED}|{_STOLE}|{_SCORED}|out at|{_PICKED_OFF}|{_CAUGHT_STEALING}|{_TAGGED_OUT})\b",
-    re.I
+    re.I,
 )
 
 # =============================================================================

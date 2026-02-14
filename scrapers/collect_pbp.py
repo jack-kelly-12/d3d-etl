@@ -31,7 +31,7 @@ def get_schedules(indir, div, year):
     fpath = Path(indir) / f"d{div}_schedules_{year}.csv"
     if fpath.exists():
         df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
-        
+
         df = df.drop_duplicates(subset=["contest_id"])
         today_et = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
         df = df[pd.to_datetime(df["date"], errors="coerce") < today_et]
@@ -153,7 +153,9 @@ def scrape_pbp(
 
         total_games = len(to_scrape)
         logger.info(f"\n=== d{div} {year} pbp — {total_games} games to scrape ===")
-        division_jobs.append({"div": div, "existing": existing, "to_scrape": to_scrape, "total_games": total_games})
+        division_jobs.append(
+            {"div": div, "existing": existing, "to_scrape": to_scrape, "total_games": total_games}
+        )
 
     if not division_jobs:
         return
@@ -184,7 +186,9 @@ def scrape_pbp(
 
                         if not df.empty:
                             rows.append(df)
-                            logger.info(f"[{games_scraped}/{total_games}] game {gid}: {len(df)} rows")
+                            logger.info(
+                                f"[{games_scraped}/{total_games}] game {gid}: {len(df)} rows"
+                            )
                         else:
                             logger.info(f"[{games_scraped}/{total_games}] game {gid}: no data")
 
@@ -193,13 +197,21 @@ def scrape_pbp(
 
                     if rows:
                         new_df = pd.concat(rows, ignore_index=True)
-                        out = pd.concat([existing, new_df], ignore_index=True) if not existing.empty else new_df
+                        out = (
+                            pd.concat([existing, new_df], ignore_index=True)
+                            if not existing.empty
+                            else new_df
+                        )
                         out.to_csv(fpath, index=False)
                         logger.info(f"  [checkpoint] saved {len(out)} rows")
 
                 if rows:
                     new_df = pd.concat(rows, ignore_index=True)
-                    out = pd.concat([existing, new_df], ignore_index=True) if not existing.empty else new_df
+                    out = (
+                        pd.concat([existing, new_df], ignore_index=True)
+                        if not existing.empty
+                        else new_df
+                    )
                     out.to_csv(fpath, index=False)
                     logger.info(f"saved {fpath} ({len(out)} total rows, {len(new_df)} new)")
         except HardBlockError as exc:
@@ -212,7 +224,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--missing_only", action="store_true", help="Only scrape games in schedule but not yet in PBP data")
+    parser.add_argument(
+        "--missing_only",
+        action="store_true",
+        help="Only scrape games in schedule but not yet in PBP data",
+    )
     parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/pbp")
     parser.add_argument("--batch_size", type=int, default=50)

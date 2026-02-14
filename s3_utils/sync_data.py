@@ -1,7 +1,7 @@
 import argparse
 
-from scrapers.scraper_utils import get_scraper_logger
 from s3_utils.sync import sync_directory_to_s3, sync_s3_prefix_to_directory
+from scrapers.scraper_utils import get_scraper_logger
 
 logger = get_scraper_logger(__name__)
 

@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pandas as pd
 
@@ -55,22 +55,24 @@ def clean_stat_df(df: pd.DataFrame) -> pd.DataFrame:
     if "gdp" in df.columns:
         df = df.drop(columns=["gdp"])
 
-    df = df.rename(columns={
-        "slgpct": "slg_pct",
-        "obpct": "ob_pct",
-        "player": "player_name",
-        "team": "team_name",
-        "yr": "class",
-    })
+    df = df.rename(
+        columns={
+            "slgpct": "slg_pct",
+            "obpct": "ob_pct",
+            "player": "player_name",
+            "team": "team_name",
+            "yr": "class",
+        }
+    )
 
     return df
 
 
-def parse_table(page, table, year, school, conference, div, team_id) -> List[Dict[str, Any]]:
+def parse_table(page, table, year, school, conference, div, team_id) -> list[dict[str, Any]]:
     headers = [th.inner_text().strip() for th in table.query_selector_all("thead th")]
     headers = [re.sub(r"[^0-9a-zA-Z]+", "_", h).strip("_").lower() for h in headers]
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
 
     for tr in table.query_selector_all("tbody tr"):
         tds = tr.query_selector_all("td")
@@ -91,15 +93,17 @@ def parse_table(page, table, year, school, conference, div, team_id) -> List[Dic
                     ncaa_id = None
                 player_url = BASE + href
 
-        row_dict.update({
-            "division": div,
-            "year": year,
-            "team_name": school,
-            "conference": conference,
-            "team_id": team_id,
-            "ncaa_id": ncaa_id,
-            "player_url": player_url,
-        })
+        row_dict.update(
+            {
+                "division": div,
+                "year": year,
+                "team_name": school,
+                "conference": conference,
+                "team_id": team_id,
+                "ncaa_id": ncaa_id,
+                "player_url": player_url,
+            }
+        )
         rows.append(row_dict)
 
     return rows
@@ -116,7 +120,7 @@ class TeamProgress:
     last_status_pitching: int = 0
     updated_at: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "team_id": self.team_id,
             "team_name": self.team_name,
@@ -133,12 +137,12 @@ def progress_path(outdir: Path, div: int, year: int) -> Path:
     return outdir / "_progress" / f"d{div}_{year}_team_progress.json"
 
 
-def load_progress(outdir: Path, div: int, year: int) -> Dict[int, TeamProgress]:
+def load_progress(outdir: Path, div: int, year: int) -> dict[int, TeamProgress]:
     p = progress_path(outdir, div, year)
     raw = read_json(p)
     if not raw:
         return {}
-    prog: Dict[int, TeamProgress] = {}
+    prog: dict[int, TeamProgress] = {}
     for k, v in raw.items():
         try:
             tid = int(k)
@@ -157,7 +161,7 @@ def load_progress(outdir: Path, div: int, year: int) -> Dict[int, TeamProgress]:
     return prog
 
 
-def save_progress(outdir: Path, div: int, year: int, prog: Dict[int, TeamProgress]) -> None:
+def save_progress(outdir: Path, div: int, year: int, prog: dict[int, TeamProgress]) -> None:
     payload = {str(tid): tp.to_dict() for tid, tp in prog.items()}
     safe_write_json(progress_path(outdir, div, year), payload)
 
@@ -191,7 +195,7 @@ def load_played_team_ids(path: Path) -> set[int]:
 def scrape_stats(
     team_ids_file: str,
     year: int,
-    divisions: List[int],
+    divisions: list[int],
     outdir: str,
     played_team_ids_dir: str | None = None,
     batch_size: int = 10,
@@ -238,10 +242,7 @@ def scrape_stats(
             else:
                 teams_div = teams_div.iloc[0:0].copy()
 
-        done_ids = {
-            tid for tid, tp in prog.items()
-            if tp.batting_done and tp.pitching_done
-        }
+        done_ids = {tid for tid, tp in prog.items() if tp.batting_done and tp.pitching_done}
         pending = teams_div[~teams_div["team_id"].isin(done_ids)].copy()
 
         print(
@@ -290,7 +291,9 @@ def scrape_stats(
                     end = min(start + batch_size, total_teams)
                     batch = teams_div.iloc[start:end]
 
-                    print(f"\n[batch] teams {start+1}-{end} (budget: {session.requests_remaining})")
+                    print(
+                        f"\n[batch] teams {start + 1}-{end} (budget: {session.requests_remaining})"
+                    )
 
                     for i, row in enumerate(batch.itertuples(index=False), start=1):
                         if session.requests_remaining <= 0:
@@ -311,14 +314,18 @@ def scrape_stats(
 
                         if not tp.batting_done:
                             url = f"{BASE}/teams/{team_id}/season_to_date_stats?year={year}"
-                            html, status = session.fetch(url, wait_selector="#stat_grid tbody tr", wait_timeout=15000)
+                            html, status = session.fetch(
+                                url, wait_selector="#stat_grid tbody tr", wait_timeout=15000
+                            )
                             tp.last_status_batting = status
                             tp.updated_at = now_iso()
 
                             if is_hard_block(status):
                                 prog[team_id] = tp
                                 save_progress(outdir_path, div, year, prog)
-                                print("[STOP] got 403 (hard block). Saved progress and stopping for safety.")
+                                print(
+                                    "[STOP] got 403 (hard block). Saved progress and stopping for safety."
+                                )
                                 return
 
                             if not html or status >= 400:
@@ -334,7 +341,9 @@ def scrape_stats(
                                 save_progress(outdir_path, div, year, prog)
                                 continue
 
-                            rows_bat = parse_table(session.page, table, year, team_name, conference, div, team_id)
+                            rows_bat = parse_table(
+                                session.page, table, year, team_name, conference, div, team_id
+                            )
                             if rows_bat:
                                 df_bat = clean_stat_df(pd.DataFrame(rows_bat))
                                 if not df_bat.empty:
@@ -346,7 +355,9 @@ def scrape_stats(
                             save_progress(outdir_path, div, year, prog)
 
                         if not tp.pitching_done:
-                            pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
+                            pitch_link = session.page.query_selector(
+                                "a.nav-link:has-text('Pitching')"
+                            )
                             if not pitch_link:
                                 print("FAILED pitching: no Pitching tab")
                                 prog[team_id] = tp
@@ -361,14 +372,18 @@ def scrape_stats(
                                 continue
 
                             pitch_url = BASE + href
-                            html2, status2 = session.fetch(pitch_url, wait_selector="#stat_grid tbody tr", wait_timeout=15000)
+                            html2, status2 = session.fetch(
+                                pitch_url, wait_selector="#stat_grid tbody tr", wait_timeout=15000
+                            )
                             tp.last_status_pitching = status2
                             tp.updated_at = now_iso()
 
                             if is_hard_block(status2):
                                 prog[team_id] = tp
                                 save_progress(outdir_path, div, year, prog)
-                                print("[STOP] got 403 (hard block). Saved progress and stopping for safety.")
+                                print(
+                                    "[STOP] got 403 (hard block). Saved progress and stopping for safety."
+                                )
                                 return
 
                             if not html2 or status2 >= 400:
@@ -384,7 +399,9 @@ def scrape_stats(
                                 save_progress(outdir_path, div, year, prog)
                                 continue
 
-                            rows_pit = parse_table(session.page, table2, year, team_name, conference, div, team_id)
+                            rows_pit = parse_table(
+                                session.page, table2, year, team_name, conference, div, team_id
+                            )
                             if rows_pit:
                                 df_pit = clean_stat_df(pd.DataFrame(rows_pit))
                                 if not df_pit.empty:
@@ -412,7 +429,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument("--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
+    parser.add_argument(
+        "--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv"
+    )
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/stats")
     parser.add_argument("--played_team_ids_dir", default=None)
     parser.add_argument("--batch_size", type=int, default=10)

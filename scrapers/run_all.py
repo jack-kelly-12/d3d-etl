@@ -45,6 +45,8 @@ def _build_year_commands(project_root: Path, year: int, cfg: PipelineConfig) -> 
             str(cfg.team_ids_file),
             "--outdir",
             str(cfg.stats_outdir),
+            "--played_team_ids_dir",
+            str(cfg.schedules_outdir),
         ],
         [
             sys.executable,

@@ -98,11 +98,10 @@ def scrape_massey_rankings(
                         _sleep_jitter(between_downloads_s)
                         break
 
-                    except HardBlockError:
-                        cooldown = min(3600.0, hardblock_cooldown_s * (2 ** (attempt - 1)))
-                        print(f"[403] cooldown ~{int(cooldown)}s; retrying (attempt {attempt}/{max_retries})")
-                        _sleep_jitter(cooldown, jitter_frac=0.20)
-                        continue
+                    except HardBlockError as exc:
+                        print(str(exc))
+                        print("[STOP] rate limit detected. Stopping scraper.")
+                        return
 
                     except (PlaywrightTimeoutError, Exception) as e:
                         print(f"attempt {attempt}/{max_retries} failed: {type(e).__name__}: {e}")

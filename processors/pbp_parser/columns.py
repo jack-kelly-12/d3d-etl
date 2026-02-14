@@ -53,12 +53,16 @@ from .regexes import (
 )
 
 
-def outs_on_play(p1_text: pd.Series, p2_text: pd.Series, p3_text: pd.Series, p4_text: pd.Series) -> tuple[pd.Series, pd.Series]:
+def outs_on_play(
+    p1_text: pd.Series, p2_text: pd.Series, p3_text: pd.Series, p4_text: pd.Series
+) -> tuple[pd.Series, pd.Series]:
     def _calc_outs(row):
-        texts = [row.iloc[0] if isinstance(row.iloc[0], str) else "",
-                 row.iloc[1] if isinstance(row.iloc[1], str) else "",
-                 row.iloc[2] if isinstance(row.iloc[2], str) else "",
-                 row.iloc[3] if isinstance(row.iloc[3], str) else ""]
+        texts = [
+            row.iloc[0] if isinstance(row.iloc[0], str) else "",
+            row.iloc[1] if isinstance(row.iloc[1], str) else "",
+            row.iloc[2] if isinstance(row.iloc[2], str) else "",
+            row.iloc[3] if isinstance(row.iloc[3], str) else "",
+        ]
         texts = [t.strip() for t in texts]
         full = " ".join(t for t in texts if t)
 
@@ -115,25 +119,31 @@ def outs_on_play(p1_text: pd.Series, p2_text: pd.Series, p3_text: pd.Series, p4_
 
 
 def metadata(df: pd.DataFrame) -> tuple[np.ndarray, pd.Series, np.ndarray]:
-    df['half'] = np.where(df["home_text"].isna() | (df["home_text"] == ""), "Top", "Bottom")
-    df['play_description'] = (df["away_text"].fillna("") + df["home_text"].fillna("")).str.strip()
-    df['play_description'] = df['play_description'].replace("", pd.NA)
+    df["half"] = np.where(df["home_text"].isna() | (df["home_text"] == ""), "Top", "Bottom")
+    df["play_description"] = (df["away_text"].fillna("") + df["home_text"].fillna("")).str.strip()
+    df["play_description"] = df["play_description"].replace("", pd.NA)
     df = df.dropna(subset=["play_description"])
-    df['play_id'] = np.arange(1, len(df) + 1)
+    df["play_id"] = np.arange(1, len(df) + 1)
 
     return df
 
 
 def outs_before(df: pd.DataFrame) -> pd.Series:
     keys = ["contest_id", "inning", "half"]
-    return df.groupby(keys)["outs_on_play"].transform(lambda s: s.shift(fill_value=0).cumsum()).astype("int16")
+    return (
+        df.groupby(keys)["outs_on_play"]
+        .transform(lambda s: s.shift(fill_value=0).cumsum())
+        .astype("int16")
+    )
 
 
 def outs_after(df: pd.DataFrame) -> pd.Series:
     return (df["outs_before"] + df["outs_on_play"]).astype("int16")
 
 
-def score_before(game_end_fl: pd.Series, runs_on_play: pd.Series, half: pd.Series, home_team: int) -> pd.Series:
+def score_before(
+    game_end_fl: pd.Series, runs_on_play: pd.Series, half: pd.Series, home_team: int
+) -> pd.Series:
     runs = pd.to_numeric(runs_on_play, errors="coerce").fillna(0).astype(int)
     is_top = pd.Series(half).eq("Top")
 
@@ -149,32 +159,38 @@ def score_before(game_end_fl: pd.Series, runs_on_play: pd.Series, half: pd.Serie
     return cum_runs - scored_runs
 
 
-def score_after(home_score_before: pd.Series, away_score_before: pd.Series, runs_on_play: pd.Series, half: pd.Series) -> tuple[pd.Series, pd.Series]:
+def score_after(
+    home_score_before: pd.Series,
+    away_score_before: pd.Series,
+    runs_on_play: pd.Series,
+    half: pd.Series,
+) -> tuple[pd.Series, pd.Series]:
     home_score_after = home_score_before + np.where(half == "Bottom", runs_on_play, 0)
     away_score_after = away_score_before + np.where(half == "Top", runs_on_play, 0)
     return home_score_after, away_score_after
+
 
 def bat_order(df: pd.DataFrame) -> pd.Series:
     bat_order = bat_order_id(df)
     bat_order = bat_order_fill(df, bat_order)
     return bat_order
 
+
 def runs_on_play(play_description: pd.Series) -> pd.Series:
     explicit_runs = (
-        play_description.str.count("homered", flags=re.IGNORECASE) +
-        play_description.str.count("homers", flags=re.IGNORECASE) +
-        play_description.str.count("scored", flags=re.IGNORECASE) +
-        play_description.str.count("scores", flags=re.IGNORECASE) +
-        play_description.str.count("advanced to home", flags=re.IGNORECASE) +
-        play_description.str.count("advances to home", flags=re.IGNORECASE) +
-        play_description.str.count("steals home", flags=re.IGNORECASE) +
-        play_description.str.count("stole home", flags=re.IGNORECASE) -
-        play_description.str.count("scored, scored", flags=re.IGNORECASE)
+        play_description.str.count("homered", flags=re.IGNORECASE)
+        + play_description.str.count("homers", flags=re.IGNORECASE)
+        + play_description.str.count("scored", flags=re.IGNORECASE)
+        + play_description.str.count("scores", flags=re.IGNORECASE)
+        + play_description.str.count("advanced to home", flags=re.IGNORECASE)
+        + play_description.str.count("advances to home", flags=re.IGNORECASE)
+        + play_description.str.count("steals home", flags=re.IGNORECASE)
+        + play_description.str.count("stole home", flags=re.IGNORECASE)
+        - play_description.str.count("scored, scored", flags=re.IGNORECASE)
     )
 
     rbi_count = (
-        play_description
-        .str.extract(r"(\d+)\s*RBI", flags=re.IGNORECASE)[0]
+        play_description.str.extract(r"(\d+)\s*RBI", flags=re.IGNORECASE)[0]
         .astype("float")
         .fillna(1)
     )
@@ -182,8 +198,8 @@ def runs_on_play(play_description: pd.Series) -> pd.Series:
     has_rbi = play_description.str.contains(r"\bRBI\b", flags=re.IGNORECASE)
 
     return (
-        explicit_runs.where(explicit_runs > 0, 0) +
-        np.where((explicit_runs == 0) & has_rbi, rbi_count, 0)
+        explicit_runs.where(explicit_runs > 0, 0)
+        + np.where((explicit_runs == 0) & has_rbi, rbi_count, 0)
     ).astype(int)
 
 
@@ -193,22 +209,25 @@ def runs_this_inn(end_inn: pd.Series, runs_on_play: pd.Series) -> pd.Series:
     endinnloc = [i for i, val in enumerate(end_inn) if val == 1]
     endinnloc = [-1] + endinnloc
     for j in range(1, len(endinnloc)):
-        start = endinnloc[j-1] + 1
+        start = endinnloc[j - 1] + 1
         end = endinnloc[j] + 1
         total = int(runs_on_play.iloc[start:end].sum())
         runs[start:end] = total
     return pd.Series(runs, index=end_inn.index)
 
-def runs_rest_of_inn(end_inn: pd.Series, runs_on_play: pd.Series, runs_this_inn_s: pd.Series) -> pd.Series:
+
+def runs_rest_of_inn(
+    end_inn: pd.Series, runs_on_play: pd.Series, runs_this_inn_s: pd.Series
+) -> pd.Series:
     m = len(end_inn)
     runs = np.zeros(m, dtype=int)
     endinnloc = [i for i, val in enumerate(end_inn) if val == 1]
     endinnloc = [-1] + endinnloc
     for j in range(1, len(endinnloc)):
-        start = endinnloc[j-1] + 1
+        start = endinnloc[j - 1] + 1
         end = endinnloc[j] + 1
         for k in range(start, end):
-            runs[k] = int(runs_this_inn_s.iloc[k]) - int(runs_on_play.iloc[start:k+1].sum())
+            runs[k] = int(runs_this_inn_s.iloc[k]) - int(runs_on_play.iloc[start : k + 1].sum())
     runs = runs + runs_on_play.values
     return pd.Series(runs, index=end_inn.index)
 
@@ -225,10 +244,14 @@ def flags(df: pd.DataFrame) -> pd.DataFrame:
     df["new_inn_fl"] = False
 
     df.loc[df.groupby("contest_id", sort=False).tail(1).index, "game_end_fl"] = True
-    df.loc[df.groupby(["contest_id", "inning", "half"], sort=False).tail(1).index, "inn_end_fl"] = True
+    df.loc[df.groupby(["contest_id", "inning", "half"], sort=False).tail(1).index, "inn_end_fl"] = (
+        True
+    )
 
     df.loc[df.groupby("contest_id", sort=False).head(1).index, "new_game_fl"] = True
-    df.loc[df.groupby(["contest_id", "inning", "half"], sort=False).head(1).index, "new_inn_fl"] = True
+    df.loc[df.groupby(["contest_id", "inning", "half"], sort=False).head(1).index, "new_inn_fl"] = (
+        True
+    )
 
     txt = df["play_description"].fillna("").astype(str)
     txt_norm = txt.str.replace(r"\s+", " ", regex=True).str.strip()
@@ -257,35 +280,45 @@ def flags(df: pd.DataFrame) -> pd.DataFrame:
     df["sub_fl"] = (has_to_for | has_in_for | has_pinch).astype(int)
 
     sub_in = np.where(
-        has_to_for, m_to_for["in"],
-        np.where(has_in_for, m_in_for["in"],
-                 np.where(has_pinch, m_pinch["in"], ""))
+        has_to_for,
+        m_to_for["in"],
+        np.where(has_in_for, m_in_for["in"], np.where(has_pinch, m_pinch["in"], "")),
     )
     sub_out = np.where(
-        has_to_for, m_to_for["out"],
-        np.where(has_in_for, m_in_for["out"],
-                 np.where(has_pinch, m_pinch["out"], ""))
+        has_to_for,
+        m_to_for["out"],
+        np.where(has_in_for, m_in_for["out"], np.where(has_pinch, m_pinch["out"], "")),
     )
 
     pinch_ptype = m_pinch.get("ptype")
     pinch_is_hit = pinch_ptype.notna() & pinch_ptype.astype(str).str.lower().eq("hit")
 
     sub_pos = np.where(
-        has_to_for, m_to_for["pos"],
-        np.where(has_in_for, m_in_for["pos"],
-                 np.where(has_pinch, np.where(pinch_is_hit, "ph", "pr"), ""))
+        has_to_for,
+        m_to_for["pos"],
+        np.where(
+            has_in_for, m_in_for["pos"], np.where(has_pinch, np.where(pinch_is_hit, "ph", "pr"), "")
+        ),
     )
 
     df["sub_in"] = pd.Series(sub_in, index=df.index).fillna("").astype(str).str.strip()
     df["sub_out"] = pd.Series(sub_out, index=df.index).fillna("").astype(str).str.strip()
-    df["sub_pos"] = pd.Series(sub_pos, index=df.index).fillna("").astype(str).str.strip().map(canon_pos)
+    df["sub_pos"] = (
+        pd.Series(sub_pos, index=df.index).fillna("").astype(str).str.strip().map(canon_pos)
+    )
 
     p1 = df["p1_text"].fillna("").astype(str)
     df["int_bb_fl"] = txt_norm.str.contains("intentionally ", regex=False).astype(int)
-    df["sh_fl"] = (p1.str.contains("SAC", regex=False) & ~p1.str.contains(r"(?:flied|popped)", regex=True)).astype(int)
+    df["sh_fl"] = (
+        p1.str.contains("SAC", regex=False) & ~p1.str.contains(r"(?:flied|popped)", regex=True)
+    ).astype(int)
     df["sf_fl"] = (
-        (p1.str.contains("SAC", regex=False) & p1.str.contains(r"(?:flied|popped)", regex=True)) |
-         (~p1.str.contains("SAC", regex=False) & p1.str.contains(r"(?:flied|popped)", regex=True) & p1.str.contains("RBI", regex=False))
+        (p1.str.contains("SAC", regex=False) & p1.str.contains(r"(?:flied|popped)", regex=True))
+        | (
+            ~p1.str.contains("SAC", regex=False)
+            & p1.str.contains(r"(?:flied|popped)", regex=True)
+            & p1.str.contains("RBI", regex=False)
+        )
     ).astype(int)
 
     df["top_inning_fl"] = df["half"].astype(str).eq("Top").astype(int)
@@ -299,17 +332,43 @@ def flags(df: pd.DataFrame) -> pd.DataFrame:
 def determine_batter_and_runners(df: pd.DataFrame) -> pd.DataFrame:
     n = len(df)
 
-    new_game = df["new_game_fl"].to_numpy(dtype=bool) if "new_game_fl" in df.columns else np.zeros(n, bool)
-    new_inn  = df["new_inn_fl"].to_numpy(dtype=bool) if "new_inn_fl" in df.columns else np.zeros(n, bool)
+    new_game = (
+        df["new_game_fl"].to_numpy(dtype=bool) if "new_game_fl" in df.columns else np.zeros(n, bool)
+    )
+    new_inn = (
+        df["new_inn_fl"].to_numpy(dtype=bool) if "new_inn_fl" in df.columns else np.zeros(n, bool)
+    )
 
-    sub_fl = df["sub_fl"].to_numpy(dtype=np.int8) if "sub_fl" in df.columns else np.zeros(n, np.int8)
-    sub_in  = df["sub_in"].fillna("").astype(str).to_numpy() if "sub_in" in df.columns else np.array([""] * n, dtype=object)
-    sub_out = df["sub_out"].fillna("").astype(str).to_numpy() if "sub_out" in df.columns else np.array([""] * n, dtype=object)
+    sub_fl = (
+        df["sub_fl"].to_numpy(dtype=np.int8) if "sub_fl" in df.columns else np.zeros(n, np.int8)
+    )
+    sub_in = (
+        df["sub_in"].fillna("").astype(str).to_numpy()
+        if "sub_in" in df.columns
+        else np.array([""] * n, dtype=object)
+    )
+    sub_out = (
+        df["sub_out"].fillna("").astype(str).to_numpy()
+        if "sub_out" in df.columns
+        else np.array([""] * n, dtype=object)
+    )
 
     p1 = df["p1_text"].fillna("").astype(str).to_numpy()
-    p2 = df["p2_text"].fillna("").astype(str).to_numpy() if "p2_text" in df.columns else np.array([""] * n, dtype=object)
-    p3 = df["p3_text"].fillna("").astype(str).to_numpy() if "p3_text" in df.columns else np.array([""] * n, dtype=object)
-    p4 = df["p4_text"].fillna("").astype(str).to_numpy() if "p4_text" in df.columns else np.array([""] * n, dtype=object)
+    p2 = (
+        df["p2_text"].fillna("").astype(str).to_numpy()
+        if "p2_text" in df.columns
+        else np.array([""] * n, dtype=object)
+    )
+    p3 = (
+        df["p3_text"].fillna("").astype(str).to_numpy()
+        if "p3_text" in df.columns
+        else np.array([""] * n, dtype=object)
+    )
+    p4 = (
+        df["p4_text"].fillna("").astype(str).to_numpy()
+        if "p4_text" in df.columns
+        else np.array([""] * n, dtype=object)
+    )
 
     bat_out = np.empty(n, dtype=object)
     player_of_interest = np.empty(n, dtype=object)
@@ -323,7 +382,7 @@ def determine_batter_and_runners(df: pd.DataFrame) -> pd.DataFrame:
     r3_after = np.empty(n, dtype=object)
 
     bases_before = np.empty(n, dtype=object)
-    bases_after  = np.empty(n, dtype=object)
+    bases_after = np.empty(n, dtype=object)
 
     def _norm(x):
         return x.strip() if isinstance(x, str) else ""
@@ -469,6 +528,7 @@ def determine_batter_and_runners(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
 def classify_event_type(df: pd.DataFrame) -> pd.Series:
     text = df["play_description"].fillna("").astype(str)
     p1 = df["p1_text"].fillna("").astype(str)
@@ -554,10 +614,7 @@ def classify_event_type(df: pd.DataFrame) -> pd.Series:
 
         return EventType.UNKNOWN
 
-    result = [
-        _classify(t, p, s)
-        for t, p, s in zip(text, p1, sub_fl, strict=True)
-    ]
+    result = [_classify(t, p, s) for t, p, s in zip(text, p1, sub_fl, strict=True)]
 
     return pd.Series(result, index=df.index, dtype="int16")
 
@@ -573,19 +630,38 @@ BATTED_BALL_EVENTS = {
 }
 
 _RX_BBTYPE = [
-    (re.compile(r"\b(?:grounded|grounds|ground(?:ed)?\s+out|ground\s+ball)\b", re.I), BattedBallType.GROUND_BALL),
+    (
+        re.compile(r"\b(?:grounded|grounds|ground(?:ed)?\s+out|ground\s+ball)\b", re.I),
+        BattedBallType.GROUND_BALL,
+    ),
     (re.compile(r"\b(?:bunt(?:ed)?|sacrifice\s+bunt)\b", re.I), BattedBallType.BUNT),
-    (re.compile(r"\b(?:lined|lines|lin(?:ed|es)\s+out|line\s+drive)\b", re.I), BattedBallType.LINE_DRIVE),
-    (re.compile(r"\b(?:popped|pops|pop(?:ped)?\s+(?:out|up)|pop\s+up|infield\s+fly)\b", re.I), BattedBallType.POP_UP),
+    (
+        re.compile(r"\b(?:lined|lines|lin(?:ed|es)\s+out|line\s+drive)\b", re.I),
+        BattedBallType.LINE_DRIVE,
+    ),
+    (
+        re.compile(r"\b(?:popped|pops|pop(?:ped)?\s+(?:out|up)|pop\s+up|infield\s+fly)\b", re.I),
+        BattedBallType.POP_UP,
+    ),
     (re.compile(r"\b(?:fouled\s+out|foul(?:ed|s)\s+out)\b", re.I), BattedBallType.POP_UP),
-    (re.compile(r"\b(?:flied|flies|fli(?:ed|es)\s+out|fly\s+(?:out|ball)|flyout|home run|homers|)\b", re.I), BattedBallType.FLY_BALL),
+    (
+        re.compile(
+            r"\b(?:flied|flies|fli(?:ed|es)\s+out|fly\s+(?:out|ball)|flyout|home run|homers|)\b",
+            re.I,
+        ),
+        BattedBallType.FLY_BALL,
+    ),
     (re.compile(r"\b(?:sacrifice\s+fly)\b", re.I), BattedBallType.FLY_BALL),
 ]
 
 
 def classify_batted_ball_type(df: pd.DataFrame) -> pd.Series:
     text = df["play_description"].fillna("").astype(str)
-    event_type = df["event_type"] if "event_type" in df.columns else pd.Series(EventType.UNKNOWN, index=df.index)
+    event_type = (
+        df["event_type"]
+        if "event_type" in df.columns
+        else pd.Series(EventType.UNKNOWN, index=df.index)
+    )
 
     def _classify(row_text: str, row_event: int) -> str | None:
         if row_event not in BATTED_BALL_EVENTS:
@@ -597,10 +673,7 @@ def classify_batted_ball_type(df: pd.DataFrame) -> pd.Series:
                 return bb_type.value
         return None
 
-    result = [
-        _classify(t, e)
-        for t, e in zip(text, event_type, strict=True)
-    ]
+    result = [_classify(t, e) for t, e in zip(text, event_type, strict=True)]
 
     return pd.Series(result, index=df.index, dtype="object")
 

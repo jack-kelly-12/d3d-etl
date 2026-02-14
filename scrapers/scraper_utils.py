@@ -11,6 +11,7 @@ from playwright.sync_api import BrowserContext, Page, Route, sync_playwright
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(filename)s | %(message)s"
 
+
 def get_scraper_logger(name: str) -> logging.Logger:
     root_logger = logging.getLogger()
     if not root_logger.handlers:
@@ -19,6 +20,8 @@ def get_scraper_logger(name: str) -> logging.Logger:
 
 
 logger = get_scraper_logger(__name__)
+RATE_LIMIT_STATUSES = frozenset((403, 429, 430))
+LONG_PAUSE_STATUSES = frozenset((503,))
 
 
 class HardBlockError(RuntimeError):
@@ -78,14 +81,13 @@ class RateLimiter:
 
     def on_error(self, status_code: int):
         self._consecutive_errors += 1
-        if status_code in (403, 429):
-            pause_seconds = random.uniform(120, 600)
+        if status_code in LONG_PAUSE_STATUSES:
+            pause_seconds = random.uniform(500, 1000)
             self._pause_until = time.time() + pause_seconds
             logger.info(f"  [rate-limit] got {status_code}, pausing for {pause_seconds:.0f}s")
         elif status_code >= 500:
             backoff = min(
-                self.backoff_base * (2 ** (self._consecutive_errors - 1)),
-                self.max_backoff
+                self.backoff_base * (2 ** (self._consecutive_errors - 1)), self.max_backoff
             )
             logger.info(f"  [rate-limit] got {status_code}, backing off {backoff:.1f}s")
             time.sleep(backoff)
@@ -135,7 +137,7 @@ class RequestCache:
         content: str,
         status: int,
         etag: str | None = None,
-        last_modified: str | None = None
+        last_modified: str | None = None,
     ):
         path = self._cache_path(contest_id, page_type)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,11 +172,33 @@ def block_resources(route: Route):
 
 def block_resources_by_url(route: Route):
     url = route.request.url.lower()
-    blocked_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
-                          ".woff", ".woff2", ".ttf", ".otf", ".eot",
-                          ".css", ".mp4", ".webm", ".mp3", ".wav")
-    blocked_domains = ("google-analytics.com", "googletagmanager.com", "facebook.com",
-                       "doubleclick.net", "adsense", "analytics")
+    blocked_extensions = (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".ico",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot",
+        ".css",
+        ".mp4",
+        ".webm",
+        ".mp3",
+        ".wav",
+    )
+    blocked_domains = (
+        "google-analytics.com",
+        "googletagmanager.com",
+        "facebook.com",
+        "doubleclick.net",
+        "adsense",
+        "analytics",
+    )
 
     if url.endswith(blocked_extensions):
         route.abort()
@@ -203,8 +227,7 @@ class ScraperSession:
     def __init__(self, config: ScraperConfig | None = None):
         self.config = config or ScraperConfig()
         self.rate_limiter = RateLimiter(
-            base_delay=self.config.base_delay,
-            jitter_pct=self.config.jitter_pct
+            base_delay=self.config.base_delay, jitter_pct=self.config.jitter_pct
         )
         self.cache: RequestCache | None = None
         if self.config.cache_html and self.config.cache_dir:
@@ -231,8 +254,6 @@ class ScraperSession:
         if budget is None:
             return float("inf")
         return max(0, int(budget) - self._request_count)
-
-
 
     def __enter__(self):
         self._playwright = sync_playwright().start()
@@ -284,7 +305,9 @@ class ScraperSession:
         wait_timeout: int | None = None,
     ) -> tuple[str | None, int]:
         if self._hard_blocked:
-            raise HardBlockError("Hard block already detected (HTTP 403). Stopping scraper.")
+            raise HardBlockError(
+                "Rate limit already detected (HTTP 403/429/430). Stopping scraper."
+            )
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -293,13 +316,29 @@ class ScraperSession:
 
         for attempt in range(1, self.config.max_retries + 1):
             try:
-                response = self.page.goto(url, timeout=self.config.timeout_ms, wait_until="domcontentloaded")
+                response = self.page.goto(
+                    url, timeout=self.config.timeout_ms, wait_until="domcontentloaded"
+                )
                 status = response.status if response else 0
 
-                if status in (403,):
+                if status in RATE_LIMIT_STATUSES:
                     self._hard_blocked = True
                     self.rate_limiter.on_error(status)
-                    raise HardBlockError("Hard block detected (HTTP 403). Stopping scraper.")
+                    raise HardBlockError(
+                        "Rate limit detected (HTTP 403/429/430). Stopping scraper."
+                    )
+
+                if status in LONG_PAUSE_STATUSES:
+                    self.rate_limiter.on_error(status)
+                    if attempt < self.config.max_retries:
+                        continue
+                    return None, status
+
+                if status >= 400:
+                    self.rate_limiter.on_error(status)
+                    if attempt < self.config.max_retries:
+                        continue
+                    return None, status
 
                 if wait_selector:
                     try:
@@ -327,7 +366,9 @@ class ScraperSession:
         url: str,
     ) -> tuple[str | None, int]:
         if self._hard_blocked:
-            raise HardBlockError("Hard block already detected (HTTP 403). Stopping scraper.")
+            raise HardBlockError(
+                "Rate limit already detected (HTTP 403/429/430). Stopping scraper."
+            )
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -340,14 +381,22 @@ class ScraperSession:
                     headers={
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                         "Accept-Encoding": "gzip, deflate, br",
-                    }
+                    },
                 )
                 status = response.status
 
-                if status == 403:
+                if status in RATE_LIMIT_STATUSES:
                     self._hard_blocked = True
                     self.rate_limiter.on_error(status)
-                    raise HardBlockError("Hard block detected (HTTP 403). Stopping scraper.")
+                    raise HardBlockError(
+                        "Rate limit detected (HTTP 403/429/430). Stopping scraper."
+                    )
+
+                if status in LONG_PAUSE_STATUSES:
+                    self.rate_limiter.on_error(status)
+                    if attempt < self.config.max_retries:
+                        continue
+                    return None, status
 
                 if status >= 400:
                     self.rate_limiter.on_error(status)
@@ -361,7 +410,9 @@ class ScraperSession:
             except HardBlockError:
                 raise
             except Exception as e:
-                logger.info(f"  [api-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
+                logger.info(
+                    f"  [api-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}"
+                )
                 if attempt < self.config.max_retries:
                     time.sleep(2 ** (attempt - 1))
                 else:
@@ -374,8 +425,7 @@ class AsyncScraperSession:
     def __init__(self, config: ScraperConfig | None = None):
         self.config = config or ScraperConfig()
         self.rate_limiter = RateLimiter(
-            base_delay=self.config.base_delay,
-            jitter_pct=self.config.jitter_pct
+            base_delay=self.config.base_delay, jitter_pct=self.config.jitter_pct
         )
         self._request_count = 0
         self._browser = None
@@ -412,10 +462,14 @@ class AsyncScraperSession:
         page = await context.new_page()
 
         if self.config.block_resources:
-            await page.route("**/*", lambda route: (
-                route.abort() if route.request.resource_type in BLOCKED_RESOURCE_TYPES
-                else route.continue_()
-            ))
+            await page.route(
+                "**/*",
+                lambda route: (
+                    route.abort()
+                    if route.request.resource_type in BLOCKED_RESOURCE_TYPES
+                    else route.continue_()
+                ),
+            )
 
         return page
 
@@ -427,7 +481,9 @@ class AsyncScraperSession:
         wait_timeout: int | None = None,
     ) -> tuple[str | None, int]:
         if self._hard_blocked:
-            raise HardBlockError("Hard block already detected (HTTP 403). Stopping scraper.")
+            raise HardBlockError(
+                "Rate limit already detected (HTTP 403/429/430). Stopping scraper."
+            )
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -436,13 +492,23 @@ class AsyncScraperSession:
 
         for attempt in range(1, self.config.max_retries + 1):
             try:
-                response = await page.goto(url, timeout=self.config.timeout_ms, wait_until="domcontentloaded")
+                response = await page.goto(
+                    url, timeout=self.config.timeout_ms, wait_until="domcontentloaded"
+                )
                 status = response.status if response else 0
 
-                if status == 403:
+                if status in RATE_LIMIT_STATUSES:
                     self._hard_blocked = True
                     self.rate_limiter.on_error(status)
-                    raise HardBlockError("Hard block detected (HTTP 403). Stopping scraper.")
+                    raise HardBlockError(
+                        "Rate limit detected (HTTP 403/429/430). Stopping scraper."
+                    )
+
+                if status in LONG_PAUSE_STATUSES:
+                    self.rate_limiter.on_error(status)
+                    if attempt < self.config.max_retries:
+                        continue
+                    return None, status
 
                 if status >= 400:
                     self.rate_limiter.on_error(status)
@@ -463,9 +529,12 @@ class AsyncScraperSession:
             except HardBlockError:
                 raise
             except Exception as e:
-                logger.info(f"  [async-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
+                logger.info(
+                    f"  [async-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}"
+                )
                 if attempt < self.config.max_retries:
                     import asyncio
+
                     await asyncio.sleep(2 ** (attempt - 1))
                 else:
                     return None, 0
@@ -479,6 +548,7 @@ def get_completed_contest_ids(outdir: Path, div: int, year: int, filename_patter
         return set()
     try:
         import pandas as pd
+
         df = pd.read_csv(fpath)
         if "contest_id" in df.columns:
             return set(df["contest_id"].dropna().astype(int).unique())

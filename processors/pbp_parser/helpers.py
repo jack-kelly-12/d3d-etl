@@ -39,7 +39,9 @@ def split_players_text(desc):
     return parts[0], parts[1], parts[2], parts[3]
 
 
-def infer_outs_from_fc(p1_text: str, has_p2: bool, has_p3: bool, has_p4: bool, outs_already: int) -> int:
+def infer_outs_from_fc(
+    p1_text: str, has_p2: bool, has_p3: bool, has_p4: bool, outs_already: int
+) -> int:
     if outs_already:
         return 0
     if not isinstance(p1_text, str) or not p1_text:
@@ -54,11 +56,14 @@ def infer_outs_from_fc(p1_text: str, has_p2: bool, has_p3: bool, has_p4: bool, o
         return 1
     return 0
 
+
 def bases_str(r1: str, r2: str, r3: str) -> str:
     return f"{'Y' if str(r1).strip() else 'N'}{'Y' if str(r2).strip() else 'N'}{'Y' if str(r3).strip() else 'N'}"
 
+
 def _s(x) -> str:
     return "" if x is None or (isinstance(x, float) and np.isnan(x)) else str(x).strip()
+
 
 def blank_if_sub_or_meta(p1: str, sub_fl: int) -> bool:
     if sub_fl == 1:
@@ -73,6 +78,7 @@ def blank_if_sub_or_meta(p1: str, sub_fl: int) -> bool:
         return True
     return False
 
+
 def is_runner_only_event(p1_text: str) -> bool:
     p1 = _s(p1_text)
     if not p1:
@@ -83,12 +89,14 @@ def is_runner_only_event(p1_text: str) -> bool:
         return True
     return False
 
+
 def extract_runner_name_from_p1(p1_text: str) -> str:
     p1 = _s(p1_text)
     if not p1:
         return ""
     m = RX_RUNNER_P1_NAME.search(p1)
     return m.group("name").strip() if m else ""
+
 
 def extract_batter_name(p1_text: str, sub_fl: int) -> str:
     p1 = _s(p1_text)
@@ -99,12 +107,14 @@ def extract_batter_name(p1_text: str, sub_fl: int) -> str:
     m = RX_BATTER_NAME.search(p1)
     return m.group("name").strip() if m else ""
 
+
 def extract_runner_name(px_text: str) -> str:
     t = _s(px_text)
     if not t:
         return ""
     m = RX_RUNNER_NAME.search(t)
     return m.group("name").strip() if m else ""
+
 
 def bat_order_id(df: pd.DataFrame) -> pd.Series:
     side = np.where(df["half"] == "Top", "A", "H")
@@ -117,6 +127,7 @@ def bat_order_id(df: pd.DataFrame) -> pd.Series:
 
     return bo.astype("Int16")
 
+
 def bat_order_fill(df: pd.DataFrame, bat_order: pd.Series) -> pd.Series:
     side = np.where(df["half"] == "Top", "A", "H")
     keys = [df["contest_id"], pd.Series(side, index=df.index)]
@@ -127,12 +138,13 @@ def bat_order_fill(df: pd.DataFrame, bat_order: pd.Series) -> pd.Series:
 
     return filled.astype("Int16")
 
+
 def batter_dest(p1_text: str) -> str:
     p1 = _s(p1_text)
     if not p1:
         return ""
     if RX_HR.search(p1):
-        return "H"   # batter scores; we'll clear bases conservatively
+        return "H"  # batter scores; we'll clear bases conservatively
     if RX_TRIPLE.search(p1):
         return "3"
     if RX_DOUBLE.search(p1):
@@ -144,6 +156,7 @@ def batter_dest(p1_text: str) -> str:
     if RX_BAT_OUT.search(p1):
         return "OUT"
     return ""
+
 
 def runner_dest(px_text: str) -> str:
     t = _s(px_text)
