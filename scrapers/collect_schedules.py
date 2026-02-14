@@ -39,6 +39,16 @@ OUT_COLS = [
 ]
 
 
+def played_team_ids_path(outdir: Path, div: int, year: int) -> Path:
+    return outdir / "_tmp" / f"d{div}_teams_played_{year}.csv"
+
+
+def write_played_team_ids(path: Path, team_ids: set[int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame({"team_id": sorted(team_ids)})
+    df.to_csv(path, index=False)
+
+
 def parse_int(text: str) -> int | None:
     if not text:
         return None
@@ -331,9 +341,13 @@ def scrape_schedules(
                 continue
 
             fpath = outdir_path / f"d{div}_schedules_{year}.csv"
+            played_ids_file = played_team_ids_path(outdir_path, div, year)
+            if played_ids_file.exists():
+                played_ids_file.unlink()
             existing = get_existing(fpath)
             start_day = get_start_date(existing, year)
             end_day = min(today, date(year, 12, 31))
+            played_team_ids: set[int] = set()
 
             if start_day > end_day:
                 logger.info(f"d{div} {year}: up to date (max date already >= today)")
@@ -359,6 +373,10 @@ def scrape_schedules(
                     day_rows = parse_scoreboard_page(html, div, year, game_day)
                     if day_rows:
                         pending_rows.extend(day_rows)
+                        for row in day_rows:
+                            tid = row.get("team_id")
+                            if tid is not None and not pd.isna(tid):
+                                played_team_ids.add(int(tid))
                         logger.info(f"d{div} {game_day.isoformat()}: parsed {len(day_rows)} team rows")
 
                     if pending_rows and len(pending_rows) >= 500:
@@ -372,12 +390,18 @@ def scrape_schedules(
                 if pending_rows:
                     existing = save_schedule(fpath, existing, pending_rows)
                     logger.info(f"saved {fpath} ({len(existing)} rows)")
+                if played_team_ids:
+                    write_played_team_ids(played_ids_file, played_team_ids)
+                    logger.info(f"saved {played_ids_file} ({len(played_team_ids)} team_ids)")
                 return
 
             if pending_rows:
                 existing = save_schedule(fpath, existing, pending_rows)
 
             logger.info(f"saved {fpath} ({len(existing)} rows)")
+            if played_team_ids:
+                write_played_team_ids(played_ids_file, played_team_ids)
+                logger.info(f"saved {played_ids_file} ({len(played_team_ids)} team_ids)")
 
 
 if __name__ == "__main__":

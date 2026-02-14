@@ -171,11 +171,29 @@ def short_break_every(n: int, idx: int) -> None:
         time.sleep(60)
 
 
+def played_team_ids_path(played_team_ids_dir: Path, div: int, year: int) -> Path:
+    return played_team_ids_dir / "_tmp" / f"d{div}_teams_played_{year}.csv"
+
+
+def load_played_team_ids(path: Path) -> set[int]:
+    if not path.exists():
+        return set()
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return set()
+    if "team_id" not in df.columns:
+        return set()
+    s = pd.to_numeric(df["team_id"], errors="coerce").dropna().astype(int)
+    return set(s.tolist())
+
+
 def scrape_stats(
     team_ids_file: str,
     year: int,
     divisions: List[int],
     outdir: str,
+    played_team_ids_dir: str | None = None,
     batch_size: int = 10,
     base_delay: float = 10.0,
     jitter_pct: float = 0.6,
@@ -191,6 +209,7 @@ def scrape_stats(
 
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
+    played_ids_dir_path = Path(played_team_ids_dir) if played_team_ids_dir else None
 
     config = ScraperConfig(
         base_delay=base_delay,
@@ -210,6 +229,14 @@ def scrape_stats(
         batting_out = outdir_path / f"d{div}_batting_{year}.csv"
         pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
         prog = load_progress(outdir_path, div, year)
+        played_ids_file = None
+        if played_ids_dir_path is not None:
+            played_ids_file = played_team_ids_path(played_ids_dir_path, div, year)
+            played_ids = load_played_team_ids(played_ids_file)
+            if played_ids:
+                teams_div = teams_div[teams_div["team_id"].isin(played_ids)].copy()
+            else:
+                teams_div = teams_div.iloc[0:0].copy()
 
         done_ids = {
             tid for tid, tp in prog.items()
@@ -228,6 +255,7 @@ def scrape_stats(
                 "batting_out": batting_out,
                 "pitching_out": pitching_out,
                 "prog": prog,
+                "played_ids_file": played_ids_file,
             }
         )
 
@@ -242,9 +270,13 @@ def scrape_stats(
                 batting_out = job["batting_out"]
                 pitching_out = job["pitching_out"]
                 prog = job["prog"]
+                played_ids_file = job["played_ids_file"]
                 total_teams = len(teams_div)
+                exhausted_budget = False
 
                 if total_teams == 0:
+                    if played_ids_file and played_ids_file.exists():
+                        played_ids_file.unlink()
                     continue
 
                 print(f"    (budget remaining: {session.requests_remaining} requests)")
@@ -252,6 +284,7 @@ def scrape_stats(
                 for start in range(0, total_teams, batch_size):
                     if session.requests_remaining <= 0:
                         print("[budget] daily request budget exhausted, stopping")
+                        exhausted_budget = True
                         break
 
                     end = min(start + batch_size, total_teams)
@@ -261,6 +294,7 @@ def scrape_stats(
 
                     for i, row in enumerate(batch.itertuples(index=False), start=1):
                         if session.requests_remaining <= 0:
+                            exhausted_budget = True
                             break
 
                         team_id = int(row.team_id)
@@ -364,6 +398,9 @@ def scrape_stats(
                 print(f"\n[done] division d{div} {year}")
                 print(f"  batting file:  {batting_out}")
                 print(f"  pitching file: {pitching_out}")
+                if played_ids_file and played_ids_file.exists() and not exhausted_budget:
+                    played_ids_file.unlink()
+                    print(f"  removed filter file: {played_ids_file}")
         except HardBlockError as exc:
             print(str(exc))
             print("[STOP] hard block detected. Saved progress and stopping for safety.")
@@ -377,6 +414,7 @@ if __name__ == "__main__":
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
     parser.add_argument("--team_ids_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/stats")
+    parser.add_argument("--played_team_ids_dir", default=None)
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--base_delay", type=float, default=8.0)
     parser.add_argument("--jitter_pct", type=float, default=0.6)
@@ -389,6 +427,7 @@ if __name__ == "__main__":
         year=args.year,
         divisions=args.divisions,
         outdir=args.outdir,
+        played_team_ids_dir=args.played_team_ids_dir,
         batch_size=args.batch_size,
         base_delay=args.base_delay,
         jitter_pct=args.jitter_pct,

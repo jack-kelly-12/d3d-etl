@@ -136,6 +136,7 @@ jobs:
               --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$STATS_OUTDIR" \
+              --played_team_ids_dir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
           done
 
@@ -205,6 +206,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-rankings-scraper
           aws-region: ${{ secrets.AWS_REGION }}
+          role-duration-seconds: 28800
 
       - name: Ensure rankings dir exists
         env:

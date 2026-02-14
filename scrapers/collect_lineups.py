@@ -2,7 +2,6 @@ import argparse
 import html
 import re
 import time
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -44,10 +43,12 @@ def get_schedules(indir, div, year):
     fpath = Path(indir) / f"d{div}_schedules_{year}.csv"
     if fpath.exists():
         df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
-        if "contest_id" in df.columns:
-            df = df.drop_duplicates(subset=["contest_id"])
-            df = df[df['game_url'].str.contains('box_score')]
-            return df
+        
+        df = df.drop_duplicates(subset=["contest_id"])
+        today_et = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
+        df = df[pd.to_datetime(df["date"], errors="coerce") < today_et]
+        return df
+        
     return pd.DataFrame()
 
 
