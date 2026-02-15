@@ -50,6 +50,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-ncaa-scrapers
           aws-region: ${{ secrets.AWS_REGION }}
+          role-duration-seconds: 28800
 
       - name: Ensure output dirs exist
         env:
