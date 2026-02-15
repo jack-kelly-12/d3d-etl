@@ -3,7 +3,7 @@ name: Daily Pull
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "0 5 * * *"
 
 concurrency:
   group: d3d-etl-daily
@@ -115,6 +115,14 @@ jobs:
               --outdir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
 
+            xvfb-run -a python -u -m scrapers.collect_stats \
+              --year "$YEAR" \
+              --divisions "${DIVS_ARR[@]}" \
+              --team_ids_file "$TEAM_IDS_FILE" \
+              --outdir "$STATS_OUTDIR" \
+              --played_team_ids_dir "$SCHEDULES_OUTDIR" \
+              --base_delay "$BASE_DELAY"
+
             xvfb-run -a python -u -m scrapers.collect_pbp \
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
@@ -130,14 +138,6 @@ jobs:
               --outdir "$LINEUPS_OUTDIR" \
               --base_delay "$BASE_DELAY" \
               --missing_only
-
-            xvfb-run -a python -u -m scrapers.collect_stats \
-              --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
-              --team_ids_file "$TEAM_IDS_FILE" \
-              --outdir "$STATS_OUTDIR" \
-              --played_team_ids_dir "$SCHEDULES_OUTDIR" \
-              --base_delay "$BASE_DELAY"
           done
 
       - name: Always upload NCAA outputs to S3
