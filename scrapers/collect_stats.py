@@ -202,7 +202,7 @@ def scrape_stats(
     base_delay: float = 10.0,
     jitter_pct: float = 0.6,
     daily_budget: int = 20000,
-    rest_every: int = 12,
+    batch_cooldown_s: int = 90,
 ):
     teams = pd.read_csv(team_ids_file)
 
@@ -310,8 +310,6 @@ def scrape_stats(
 
                         print(f"[team] {team_name} ({team_id})")
 
-                        short_break_every(rest_every, (start + i))
-
                         if not tp.batting_done:
                             url = f"{BASE}/teams/{team_id}/season_to_date_stats?year={year}"
                             html, status = session.fetch(
@@ -412,6 +410,11 @@ def scrape_stats(
                             prog[team_id] = tp
                             save_progress(outdir_path, div, year, prog)
 
+                    if end < total_teams:
+                        cooldown = int(batch_cooldown_s)
+                        print(f"\n[cooldown] sleeping {cooldown}s before next batch")
+                        time.sleep(cooldown)
+
                 print(f"\n[done] division d{div} {year}")
                 print(f"  batting file:  {batting_out}")
                 print(f"  pitching file: {pitching_out}")
@@ -438,7 +441,7 @@ if __name__ == "__main__":
     parser.add_argument("--base_delay", type=float, default=8.0)
     parser.add_argument("--jitter_pct", type=float, default=0.6)
     parser.add_argument("--daily_budget", type=int, default=20000)
-    parser.add_argument("--rest_every", type=int, default=50, help="Rest 60s every N teams")
+    parser.add_argument("--batch_cooldown_s", type=int, default=90)
     args = parser.parse_args()
 
     scrape_stats(
@@ -451,5 +454,5 @@ if __name__ == "__main__":
         base_delay=args.base_delay,
         jitter_pct=args.jitter_pct,
         daily_budget=args.daily_budget,
-        rest_every=args.rest_every,
+        batch_cooldown_s=args.batch_cooldown_s,
     )
