@@ -50,7 +50,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-ncaa-scrapers
           aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 28800
+          role-duration-seconds: 43200
 
       - name: Ensure output dirs exist
         env:
@@ -184,7 +184,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-pbp-scraper
           aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 28800
+          role-duration-seconds: 43200
 
       - name: Ensure dirs exist
         env:
@@ -314,7 +314,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-lineups-scraper
           aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 28800
+          role-duration-seconds: 43200
 
       - name: Ensure dirs exist
         env:
@@ -444,7 +444,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-stats-scraper
           aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 28800
+          role-duration-seconds: 43200
 
       - name: Ensure stats dirs exist
         env:
@@ -578,7 +578,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: d3d-etl-rankings-scraper
           aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 28800
+          role-duration-seconds: 43200
 
       - name: Ensure rankings dir exists
         env:
