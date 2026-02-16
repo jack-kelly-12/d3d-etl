@@ -405,7 +405,7 @@ async def main(
     missing_only=False,
     outdir=OUTDIR,
     team_name=None,
-    base_delay=3.0,
+    base_delay=0.0,
 ):
     schools = await fetch_school_list()
 
@@ -478,7 +478,6 @@ async def main(
 
 
 if __name__ == "__main__":
-    print("[start] scrapers.collect_headshots", flush=True)
     parser = argparse.ArgumentParser(description="Scrape team roster headshots")
     parser.add_argument("--season", type=int, default=2025, help="Season year")
     parser.add_argument("--team", type=str, default=None, help="Specific team name to scrape")

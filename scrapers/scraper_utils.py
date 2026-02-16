@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import BrowserContext, Page, Route, sync_playwright
 
@@ -71,8 +72,7 @@ class RateLimiter:
             elapsed = now - self._last_request_time
             delay = self._jittered_delay()
             if elapsed < delay:
-                sleep_time = delay - elapsed
-                time.sleep(sleep_time)
+                time.sleep(delay - elapsed)
 
         self._last_request_time = time.time()
 
@@ -160,49 +160,95 @@ class RequestCache:
         return self._metadata.get(self._cache_key(contest_id, page_type))
 
 
-BLOCKED_RESOURCE_TYPES = {"image", "font", "stylesheet", "media"}
+BLOCKED_RESOURCE_TYPES = {"image", "font", "media"}
+
+BLOCKED_EXTS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".mp4",
+    ".webm",
+    ".mp3",
+    ".wav",
+    ".mov",
+    ".avi",
+    ".m4v",
+}
+
+BLOCKED_3P_HOST_SUBSTRINGS = {
+    "google-analytics.com",
+    "googletagmanager.com",
+    "doubleclick.net",
+    "adsystem",
+    "adsense",
+    "facebook.com",
+    "connect.facebook.net",
+    "facebook.net",
+}
+
+ALLOWED_3P_HOST_SUBSTRINGS = {
+    "go-mpulse.net",
+    "akamai",
+    "akamaihd.net",
+}
 
 
-def block_resources(route: Route):
-    if route.request.resource_type in BLOCKED_RESOURCE_TYPES:
-        route.abort()
-    else:
-        route.continue_()
-
-
-def block_resources_by_url(route: Route):
-    url = route.request.url.lower()
-    blocked_extensions = (
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".webp",
-        ".svg",
-        ".ico",
-        ".woff",
-        ".woff2",
-        ".ttf",
-        ".otf",
-        ".eot",
-        ".css",
-        ".mp4",
-        ".webm",
-        ".mp3",
-        ".wav",
+def looks_like_block_page(html: str | None) -> bool:
+    if not html:
+        return False
+    s = html.lower()
+    return (
+        "access denied" in s
+        or ("akamai" in s and "reference" in s)
+        or "request blocked" in s
+        or "perimeterx" in s
+        or "attention required" in s
     )
-    blocked_domains = (
-        "google-analytics.com",
-        "googletagmanager.com",
-        "facebook.com",
-        "doubleclick.net",
-        "adsense",
-        "analytics",
-    )
 
-    if url.endswith(blocked_extensions):
-        route.abort()
-    elif any(domain in url for domain in blocked_domains):
+
+def _should_abort_request(request) -> bool:
+    url = request.url
+    rtype = request.resource_type
+
+    if rtype in {"document", "xhr", "fetch"}:
+        return False
+
+    if rtype in BLOCKED_RESOURCE_TYPES:
+        return True
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+
+    if any(path.endswith(ext) for ext in BLOCKED_EXTS):
+        return True
+
+    if host.endswith("stats.ncaa.org"):
+        return False
+
+    if any(s in host for s in ALLOWED_3P_HOST_SUBSTRINGS):
+        return False
+
+    if any(s in host for s in BLOCKED_3P_HOST_SUBSTRINGS):
+        return True
+
+    if rtype in {"script", "stylesheet", "other"}:
+        return True
+
+    return False
+
+
+def smart_block(route: Route):
+    if _should_abort_request(route.request):
         route.abort()
     else:
         route.continue_()
@@ -221,6 +267,10 @@ class ScraperConfig:
     cache_dir: Path | None = None
     concurrency: int = 1
     accept_downloads: bool = False
+    user_agent: str = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
 
 
 class ScraperSession:
@@ -259,14 +309,17 @@ class ScraperSession:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=self.config.headless)
         self._context = self._browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent=self.config.user_agent,
             viewport={"width": 1920, "height": 1080},
             accept_downloads=self.config.accept_downloads,
+            locale="en-US",
+            timezone_id="America/Chicago",
         )
+        self._context.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
         self._page = self._context.new_page()
 
         if self.config.block_resources:
-            self._page.route("**/*", block_resources)
+            self._page.route("**/*", smart_block)
 
         return self
 
@@ -305,9 +358,7 @@ class ScraperSession:
         wait_timeout: int | None = None,
     ) -> tuple[str | None, int]:
         if self._hard_blocked:
-            raise HardBlockError(
-                "Rate limit already detected (HTTP 403/429/430). Stopping scraper."
-            )
+            raise HardBlockError("Hard block already detected. Stopping scraper.")
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -348,6 +399,11 @@ class ScraperSession:
 
                 self.rate_limiter.on_success()
                 html = self.page.content()
+
+                if looks_like_block_page(html):
+                    self._hard_blocked = True
+                    raise HardBlockError("Block page detected (soft block). Stopping scraper.")
+
                 return html, status
 
             except HardBlockError:
@@ -355,20 +411,17 @@ class ScraperSession:
             except Exception as e:
                 logger.info(f"  [fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
                 if attempt < self.config.max_retries:
-                    time.sleep(2 ** (attempt - 1))
+                    time.sleep(min(10.0, 2.0 ** (attempt - 1) + 1.0))
                 else:
                     return None, 0
 
         return None, 0
 
-    def fetch_with_api_request(
-        self,
-        url: str,
-    ) -> tuple[str | None, int]:
+    def fetch_with_api_request(self, url: str) -> tuple[str | None, int]:
         if self._hard_blocked:
-            raise HardBlockError(
-                "Rate limit already detected (HTTP 403/429/430). Stopping scraper."
-            )
+            raise HardBlockError("Hard block already detected. Stopping scraper.")
+        if self._context is None:
+            raise RuntimeError("Session not started.")
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -381,6 +434,7 @@ class ScraperSession:
                     headers={
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                         "Accept-Encoding": "gzip, deflate, br",
+                        "Accept-Language": "en-US,en;q=0.9",
                     },
                 )
                 status = response.status
@@ -405,7 +459,13 @@ class ScraperSession:
                     return None, status
 
                 self.rate_limiter.on_success()
-                return response.text(), status
+                text = response.text()
+
+                if looks_like_block_page(text):
+                    self._hard_blocked = True
+                    raise HardBlockError("Block page detected (soft block). Stopping scraper.")
+
+                return text, status
 
             except HardBlockError:
                 raise
@@ -414,7 +474,7 @@ class ScraperSession:
                     f"  [api-fetch] attempt {attempt}/{self.config.max_retries} failed: {e}"
                 )
                 if attempt < self.config.max_retries:
-                    time.sleep(2 ** (attempt - 1))
+                    time.sleep(min(10.0, 2.0 ** (attempt - 1) + 1.0))
                 else:
                     return None, 0
 
@@ -456,34 +516,29 @@ class AsyncScraperSession:
 
     async def new_page(self):
         context = await self._browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent=self.config.user_agent,
             viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+            timezone_id="America/Chicago",
         )
+        await context.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
         page = await context.new_page()
 
         if self.config.block_resources:
             await page.route(
                 "**/*",
-                lambda route: (
-                    route.abort()
-                    if route.request.resource_type in BLOCKED_RESOURCE_TYPES
-                    else route.continue_()
-                ),
+                lambda route: route.abort()
+                if _should_abort_request(route.request)
+                else route.continue_(),
             )
 
         return page
 
     async def fetch(
-        self,
-        page,
-        url: str,
-        wait_selector: str | None = None,
-        wait_timeout: int | None = None,
+        self, page, url: str, wait_selector: str | None = None, wait_timeout: int | None = None
     ) -> tuple[str | None, int]:
         if self._hard_blocked:
-            raise HardBlockError(
-                "Rate limit already detected (HTTP 403/429/430). Stopping scraper."
-            )
+            raise HardBlockError("Hard block already detected. Stopping scraper.")
 
         self.rate_limiter.wait()
         self._request_count += 1
@@ -524,6 +579,11 @@ class AsyncScraperSession:
 
                 self.rate_limiter.on_success()
                 html = await page.content()
+
+                if looks_like_block_page(html):
+                    self._hard_blocked = True
+                    raise HardBlockError("Block page detected (soft block). Stopping scraper.")
+
                 return html, status
 
             except HardBlockError:
@@ -535,7 +595,7 @@ class AsyncScraperSession:
                 if attempt < self.config.max_retries:
                     import asyncio
 
-                    await asyncio.sleep(2 ** (attempt - 1))
+                    await asyncio.sleep(min(10.0, 2.0 ** (attempt - 1) + 1.0))
                 else:
                     return None, 0
 

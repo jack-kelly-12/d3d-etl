@@ -160,7 +160,7 @@ def scrape_pbp(
     if not division_jobs:
         return
 
-    config = ScraperConfig(base_delay=base_delay, block_resources=False)
+    config = ScraperConfig(base_delay=base_delay, block_resources=True)
 
     with ScraperSession(config) as session:
         try:
