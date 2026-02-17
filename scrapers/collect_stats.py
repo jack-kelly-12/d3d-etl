@@ -143,7 +143,7 @@ def scrape_stats(
     divisions: list[int],
     outdir: str,
     played_team_ids_dir: str | None = None,
-    all_teams: bool = False,
+    run_all: bool = False,
     run_remaining: bool = False,
     batch_size: int = 10,
     base_delay: float = 10.0,
@@ -180,7 +180,7 @@ def scrape_stats(
         batting_out = outdir_path / f"d{div}_batting_{year}.csv"
         pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
         played_ids_file = None
-        if played_ids_dir_path is not None and not all_teams:
+        if played_ids_dir_path is not None and not run_all:
             played_ids_file = played_team_ids_path(played_ids_dir_path, div, year)
             played_ids = load_played_team_ids(played_ids_file)
             if played_ids:
@@ -400,10 +400,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/stats")
     parser.add_argument("--played_team_ids_dir", default=None)
-    parser.add_argument("--all_teams", action="store_true")
+    parser.add_argument("--run_all", action="store_true")
     parser.add_argument("--run_remaining", action="store_true")
     parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--base_delay", type=float, default=8.0)
+    parser.add_argument("--base_delay", type=float, default=10.0)
     parser.add_argument("--jitter_pct", type=float, default=0.6)
     parser.add_argument("--daily_budget", type=int, default=20000)
     parser.add_argument("--batch_cooldown_s", type=int, default=90)
@@ -415,7 +415,7 @@ if __name__ == "__main__":
         divisions=args.divisions,
         outdir=args.outdir,
         played_team_ids_dir=args.played_team_ids_dir,
-        all_teams=args.all_teams,
+        run_all=args.run_all,
         run_remaining=args.run_remaining,
         batch_size=args.batch_size,
         base_delay=args.base_delay,
