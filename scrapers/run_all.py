@@ -64,7 +64,7 @@ def _build_year_commands(project_root: Path, year: int, cfg: PipelineConfig) -> 
             "scrapers.collect_lineups",
             *common,
             "--indir",
-            str(cfg.schedules_outdir),
+            str(cfg.pbp_outdir),
             "--outdir",
             str(cfg.lineups_outdir),
         ],

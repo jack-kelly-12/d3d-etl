@@ -35,17 +35,18 @@ def looks_blocked(html_text: str) -> bool:
     return any(p in t for p in pats)
 
 
-def get_schedules(indir, div, year):
-    fpath = Path(indir) / f"d{div}_schedules_{year}.csv"
-    if fpath.exists():
-        df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
-
-        df = df.drop_duplicates(subset=["contest_id"])
-        today_et = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
-        df = df[pd.to_datetime(df["date"], errors="coerce") < today_et]
-        return df
-
-    return pd.DataFrame()
+def get_contests_from_pbp(indir, div, year):
+    fpath = Path(indir) / f"d{div}_pbp_{year}.csv"
+    if not fpath.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(fpath, usecols=["contest_id"], dtype={"contest_id": "Int64"})
+    except Exception:
+        return pd.DataFrame()
+    if "contest_id" not in df.columns:
+        return pd.DataFrame()
+    df = df.dropna(subset=["contest_id"]).drop_duplicates(subset=["contest_id"])
+    return df
 
 
 def _parse_team_header_text(card_header_el) -> tuple[int | None, str]:
@@ -298,18 +299,18 @@ def scrape_lineups(
     outdir_path.mkdir(parents=True, exist_ok=True)
 
     division_jobs = []
-    print("[trace] collect_lineups: scanning schedules/progress", flush=True)
+    print("[trace] collect_lineups: scanning pbp/progress", flush=True)
     for div in divisions:
-        sched = get_schedules(indir, div, year)
-        if sched.empty:
-            print(f"no schedule for d{div} {year}")
+        contests = get_contests_from_pbp(indir, div, year)
+        if contests.empty:
+            print(f"no pbp contests for d{div} {year}")
             continue
 
         hit_out = outdir_path / f"d{div}_batting_lineups_{year}.csv"
         pit_out = outdir_path / f"d{div}_pitching_lineups_{year}.csv"
         hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
 
-        all_games = sched["contest_id"].tolist()
+        all_games = contests["contest_id"].tolist()
         games = [gid for gid in all_games if gid not in both_done] if missing_only else all_games
 
         total_games = len(all_games)
@@ -440,7 +441,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Only scrape contests missing from both lineup outputs",
     )
-    parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/schedules")
+    parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/pbp")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/lineups")
     parser.add_argument("--batch_size", type=int, default=25)
     parser.add_argument("--base_delay", type=float, default=10.0)
