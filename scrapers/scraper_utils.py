@@ -351,6 +351,29 @@ class ScraperSession:
             raise RuntimeError("Session not started. Use 'with ScraperSession() as session:'")
         return self._page
 
+    def reset_page(self, clear_cookies: bool = False) -> None:
+        if self._context is None:
+            raise RuntimeError("Session not started. Use 'with ScraperSession() as session:'")
+        try:
+            if self._page:
+                try:
+                    self._page.goto("about:blank", timeout=5000)
+                except Exception:
+                    pass
+                self._page.close()
+        except Exception:
+            pass
+
+        if clear_cookies:
+            try:
+                self._context.clear_cookies()
+            except Exception:
+                pass
+
+        self._page = self._context.new_page()
+        if self.config.block_resources:
+            self._page.route("**/*", smart_block)
+
     def fetch(
         self,
         url: str,

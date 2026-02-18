@@ -1,4 +1,5 @@
 import argparse
+import random
 import re
 import time
 from pathlib import Path
@@ -92,12 +93,22 @@ def parse_table(page, table, year, school, conference, div, team_id) -> list[dic
 
 
 def is_hard_block(status: int) -> bool:
-    return status == 403
+    return status in (403, 429, 430)
 
 
 def short_break_every(n: int, idx: int) -> None:
     if n > 0 and idx > 0 and idx % n == 0:
         time.sleep(60)
+
+
+def human_pause(min_s: float = 2.5, max_s: float = 7.5) -> None:
+    time.sleep(random.uniform(min_s, max_s))
+
+
+def hard_block_cooldown(min_minutes: int = 30, max_minutes: int = 90) -> None:
+    cooldown_seconds = int(random.uniform(min_minutes * 60, max_minutes * 60))
+    print(f"[cooldown] hard block detected, sleeping {cooldown_seconds}s before exit")
+    time.sleep(cooldown_seconds)
 
 
 def played_team_ids_path(played_team_ids_dir: Path, div: int, year: int) -> Path:
@@ -165,7 +176,7 @@ def scrape_stats(
     config = ScraperConfig(
         base_delay=base_delay,
         jitter_pct=jitter_pct,
-        block_resources=True,
+        block_resources=False,
         daily_request_budget=daily_budget,
     )
 
@@ -194,6 +205,7 @@ def scrape_stats(
         scoped = (
             teams_div[~teams_div["team_id"].isin(done_ids)].copy() if run_remaining else teams_div
         )
+        scoped = scoped.sample(frac=1.0, random_state=None).reset_index(drop=True)
 
         print(
             f"\n=== d{div} {year} team stats — total {total_teams} | done {len(done_ids)} | remaining {len(scoped)} ==="
@@ -227,6 +239,9 @@ def scrape_stats(
                 total_teams = len(teams_div)
                 exhausted_budget = False
                 hard_blocked = False
+                teams_processed = 0
+                next_long_break_at = random.randint(15, 25)
+                next_page_reset_at = random.randint(20, 35)
 
                 if total_teams == 0:
                     if played_ids_file and played_ids_file.exists():
@@ -262,16 +277,18 @@ def scrape_stats(
                         pitching_done = run_remaining and team_id in done_pitching_ids
 
                         print(f"[team] {team_name} ({team_id})")
+                        teams_processed += 1
 
                         if not batting_done:
                             batting_category = HITTING_CATEGORY_ID_2026 if year == 2026 else None
                             url = season_to_date_stats_url(team_id, year, batting_category)
                             html, status = session.fetch(
-                                url, wait_selector="#stat_grid tbody tr", wait_timeout=15000
+                                url, wait_selector="#stat_grid", wait_timeout=15000
                             )
 
                             if is_hard_block(status):
-                                print("[STOP] got 403 (hard block). Stopping for safety.")
+                                print(f"[STOP] got hard block status {status}. Stopping for safety.")
+                                hard_block_cooldown()
                                 hard_blocked = True
                                 break
 
@@ -279,6 +296,7 @@ def scrape_stats(
                                 print(f"FAILED batting: HTTP {status}")
                                 continue
 
+                            human_pause(0.8, 2.2)
                             table = session.page.query_selector("#stat_grid")
                             if not table:
                                 print("FAILED batting: no #stat_grid")
@@ -292,6 +310,7 @@ def scrape_stats(
                                 if not df_bat.empty:
                                     batch_batting_frames.append(df_bat)
                                     print(f"OK batting -> queued {len(df_bat)} rows")
+                            human_pause()
 
                         if not pitching_done:
                             if year == 2026:
@@ -312,7 +331,10 @@ def scrape_stats(
                                         wait_timeout=15000,
                                     )
                                     if is_hard_block(status_base):
-                                        print("[STOP] got 403 (hard block). Stopping for safety.")
+                                        print(
+                                            f"[STOP] got hard block status {status_base}. Stopping for safety."
+                                        )
+                                        hard_block_cooldown()
                                         hard_blocked = True
                                         break
                                     if not html_base or status_base >= 400:
@@ -332,11 +354,12 @@ def scrape_stats(
 
                                 pitch_url = BASE + href
                             html2, status2 = session.fetch(
-                                pitch_url, wait_selector="#stat_grid tbody tr", wait_timeout=15000
+                                pitch_url, wait_selector="#stat_grid", wait_timeout=15000
                             )
 
                             if is_hard_block(status2):
-                                print("[STOP] got 403 (hard block). Stopping for safety.")
+                                print(f"[STOP] got hard block status {status2}. Stopping for safety.")
+                                hard_block_cooldown()
                                 hard_blocked = True
                                 break
 
@@ -344,6 +367,7 @@ def scrape_stats(
                                 print(f"FAILED pitching: HTTP {status2}")
                                 continue
 
+                            human_pause(0.8, 2.2)
                             table2 = session.page.query_selector("#stat_grid")
                             if not table2:
                                 print("FAILED pitching: no #stat_grid")
@@ -357,6 +381,20 @@ def scrape_stats(
                                 if not df_pit.empty:
                                     batch_pitching_frames.append(df_pit)
                                     print(f"OK pitching -> queued {len(df_pit)} rows")
+                            human_pause()
+
+                        if teams_processed >= next_long_break_at:
+                            coffee_break = random.uniform(60, 180)
+                            print(f"[break] sleeping {coffee_break:.1f}s after {teams_processed} teams")
+                            time.sleep(coffee_break)
+                            next_long_break_at += random.randint(15, 25)
+
+                        if teams_processed >= next_page_reset_at:
+                            print(f"[rotate] resetting browser page after {teams_processed} teams")
+                            session.reset_page(clear_cookies=False)
+                            next_page_reset_at += random.randint(20, 35)
+
+                        human_pause(3.0, 10.0)
 
                     if batch_batting_frames:
                         append_csv(batting_out, pd.concat(batch_batting_frames, ignore_index=True))
