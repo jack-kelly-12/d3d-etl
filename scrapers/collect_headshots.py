@@ -7,15 +7,24 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import pandas as pd
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
+from playwright.async_api import BrowserContext, async_playwright
 
-from .scraper_utils import BLOCKED_RESOURCE_TYPES, ScraperConfig
+from .scraper_utils import BLOCKED_RESOURCE_TYPES
 
 OUTDIR = "/Users/jackkelly/Desktop/d3d-etl/data/headshots"
+SCHOOL_LIST_FILE = "/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+ROSTER_WAIT_SELECTOR = (
+    'div[data-test-id="s-person-card-list__root"], '
+    ".sidearm-roster-player, table.sidearm-table"
+)
 
 
-async def fetch_school_list():
-    with open("/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json") as f:
+def load_school_list(path: str) -> list[dict]:
+    with open(path) as f:
         return json.load(f)
 
 
@@ -41,12 +50,11 @@ def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
         (f"{base}/sports/bsb/{presto_season_slug(season)}/roster", "presto"),
     ]
 
-
 def detect_cms(html: str) -> str | None:
     h = (html or "").lower()
     if "presto-sport-static" in h or "theme-assets.prestosports.com" in h:
         return "presto"
-    if 'class="sidearm-' in h or "sidearm-" in h:
+    if "class=\"sidearm-" in h or "sidearm-" in h:
         return "sidearm"
     return None
 
@@ -85,6 +93,40 @@ def _clean_field(x: str | None) -> str | None:
     return x if x else None
 
 
+def _row(
+    team: str,
+    season: int,
+    url: str,
+    name: str,
+    number: str | None,
+    position: str | None,
+    height: str | None,
+    weight: str | None,
+    player_class: str | None,
+    b_t: str | None,
+    hometown: str | None,
+    highschool: str | None,
+    previous_school: str | None,
+    img_url: str | None,
+) -> dict:
+    return {
+        "team": team,
+        "year": season,
+        "roster_url": url,
+        "name": name,
+        "number": number,
+        "position": position,
+        "height": height,
+        "weight": weight,
+        "class": player_class,
+        "b_t": b_t,
+        "hometown": hometown,
+        "highschool": highschool,
+        "previous_school": previous_school,
+        "img_url": img_url,
+    }
+
+
 def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     rows: list[dict] = []
@@ -92,9 +134,7 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
     for p in soup.select(".sidearm-roster-player"):
         name_el = p.select_one(".sidearm-roster-player-name a, .sidearm-roster-player-name")
         number_el = p.select_one(".sidearm-roster-player-jersey-number")
-        pos_el = p.select_one(
-            ".sidearm-roster-player-position-long-short, .sidearm-roster-player-position"
-        )
+        pos_el = p.select_one(".sidearm-roster-player-position-long-short, .sidearm-roster-player-position")
         height_el = p.select_one(".sidearm-roster-player-height")
         weight_el = p.select_one(".sidearm-roster-player-weight")
         year_el = p.select_one(".sidearm-roster-player-academic-year")
@@ -114,22 +154,22 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
             continue
 
         rows.append(
-            {
-                "team": team,
-                "year": season,
-                "roster_url": url,
-                "name": name,
-                "number": _clean_field(_txt(number_el)),
-                "position": _clean_field(_txt(pos_el)),
-                "height": _clean_field(_txt(height_el)),
-                "weight": _clean_field(_txt(weight_el)),
-                "class": _clean_field(_txt(year_el)),
-                "b_t": _clean_field(_txt(bt_el)),
-                "hometown": _clean_field(_txt(hometown_el)),
-                "highschool": _clean_field(_txt(hs_el)),
-                "previous_school": _clean_field(_txt(prev_el)),
-                "img_url": img_url,
-            }
+            _row(
+                team=team,
+                season=season,
+                url=url,
+                name=name,
+                number=_clean_field(_txt(number_el)),
+                position=_clean_field(_txt(pos_el)),
+                height=_clean_field(_txt(height_el)),
+                weight=_clean_field(_txt(weight_el)),
+                player_class=_clean_field(_txt(year_el)),
+                b_t=_clean_field(_txt(bt_el)),
+                hometown=_clean_field(_txt(hometown_el)),
+                highschool=_clean_field(_txt(hs_el)),
+                previous_school=_clean_field(_txt(prev_el)),
+                img_url=img_url,
+            )
         )
 
     if not rows:
@@ -155,22 +195,22 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
                 continue
 
             rows.append(
-                {
-                    "team": team,
-                    "year": season,
-                    "roster_url": url,
-                    "name": name,
-                    "number": _clean_field(_txt(num_el)),
-                    "position": _clean_field(_txt(pos_el)),
-                    "height": _clean_field(_txt(ht_el)),
-                    "weight": _clean_field(_txt(wt_el)),
-                    "class": _clean_field(_txt(year_el)),
-                    "b_t": _clean_field(_txt(bt_el)),
-                    "hometown": _clean_field(_txt(home_el)),
-                    "highschool": None,
-                    "previous_school": _clean_field(_txt(prev_el)),
-                    "img_url": img_url,
-                }
+                _row(
+                    team=team,
+                    season=season,
+                    url=url,
+                    name=name,
+                    number=_clean_field(_txt(num_el)),
+                    position=_clean_field(_txt(pos_el)),
+                    height=_clean_field(_txt(ht_el)),
+                    weight=_clean_field(_txt(wt_el)),
+                    player_class=_clean_field(_txt(year_el)),
+                    b_t=_clean_field(_txt(bt_el)),
+                    hometown=_clean_field(_txt(home_el)),
+                    highschool=None,
+                    previous_school=_clean_field(_txt(prev_el)),
+                    img_url=img_url,
+                )
             )
 
     if not rows:
@@ -190,23 +230,13 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
                 stamp_text = card.select_one(".s-stamp__text")
                 number = _txt(stamp_text)
 
-            pos_el = card.select_one(
-                '[data-test-id="s-person-details__bio-stats-person-position-short"]'
-            )
+            pos_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-position-short"]')
             class_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-title"]')
-            height_el = card.select_one(
-                '[data-test-id="s-person-details__bio-stats-person-season"]'
-            )
-            weight_el = card.select_one(
-                '[data-test-id="s-person-details__bio-stats-person-weight"]'
-            )
+            height_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-season"]')
+            weight_el = card.select_one('[data-test-id="s-person-details__bio-stats-person-weight"]')
 
-            hometown_el = card.select_one(
-                '[data-test-id="s-person-card-list__content-location-person-hometown"]'
-            )
-            hs_el = card.select_one(
-                '[data-test-id="s-person-card-list__content-location-person-high-school"]'
-            )
+            hometown_el = card.select_one('[data-test-id="s-person-card-list__content-location-person-hometown"]')
+            hs_el = card.select_one('[data-test-id="s-person-card-list__content-location-person-high-school"]')
 
             img_el = card.select_one('img[data-test-id="s-image-resized__img"], img')
             img_url = None
@@ -215,22 +245,22 @@ def parse_sidearm(html: str, team: str, season: int, url: str) -> list[dict]:
                 img_url = _strip_sidearm_crop(src)
 
             rows.append(
-                {
-                    "team": team,
-                    "year": season,
-                    "roster_url": url,
-                    "name": name,
-                    "number": _clean_field(number),
-                    "position": _clean_field(_txt(pos_el)),
-                    "height": _clean_field(_txt(height_el)),
-                    "weight": _clean_field(_txt(weight_el)),
-                    "class": _clean_field(_txt(class_el)),
-                    "b_t": None,
-                    "hometown": _clean_field(_txt(hometown_el)),
-                    "highschool": _clean_field(_txt(hs_el)),
-                    "previous_school": None,
-                    "img_url": img_url,
-                }
+                _row(
+                    team=team,
+                    season=season,
+                    url=url,
+                    name=name,
+                    number=_clean_field(number),
+                    position=_clean_field(_txt(pos_el)),
+                    height=_clean_field(_txt(height_el)),
+                    weight=_clean_field(_txt(weight_el)),
+                    player_class=_clean_field(_txt(class_el)),
+                    b_t=None,
+                    hometown=_clean_field(_txt(hometown_el)),
+                    highschool=_clean_field(_txt(hs_el)),
+                    previous_school=None,
+                    img_url=img_url,
+                )
             )
 
     return rows
@@ -264,22 +294,22 @@ def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
                     break
 
             rows.append(
-                {
-                    "team": team,
-                    "year": season,
-                    "roster_url": url,
-                    "name": name,
-                    "number": None,
-                    "position": None,
-                    "height": None,
-                    "weight": None,
-                    "class": None,
-                    "b_t": None,
-                    "hometown": None,
-                    "highschool": None,
-                    "previous_school": None,
-                    "img_url": img,
-                }
+                _row(
+                    team=team,
+                    season=season,
+                    url=url,
+                    name=name,
+                    number=None,
+                    position=None,
+                    height=None,
+                    weight=None,
+                    player_class=None,
+                    b_t=None,
+                    hometown=None,
+                    highschool=None,
+                    previous_school=None,
+                    img_url=img,
+                )
             )
         return rows
 
@@ -306,37 +336,34 @@ def parse_presto(html: str, team: str, season: int, url: str) -> list[dict]:
             continue
 
         rows.append(
-            {
-                "team": team,
-                "year": season,
-                "roster_url": url,
-                "name": name,
-                "number": _clean_field(_txt(number_el)),
-                "position": _clean_field(_txt(pos_el)),
-                "height": _clean_field(_txt(height_el)),
-                "weight": _clean_field(_txt(weight_el)),
-                "class": _clean_field(_txt(year_el)),
-                "b_t": _clean_field(_txt(bt_el)),
-                "hometown": _clean_field(_txt(hometown_el)),
-                "highschool": _clean_field(_txt(hs_el)),
-                "previous_school": _clean_field(_txt(prev_el)),
-                "img_url": img_url,
-            }
+            _row(
+                team=team,
+                season=season,
+                url=url,
+                name=name,
+                number=_clean_field(_txt(number_el)),
+                position=_clean_field(_txt(pos_el)),
+                height=_clean_field(_txt(height_el)),
+                weight=_clean_field(_txt(weight_el)),
+                player_class=_clean_field(_txt(year_el)),
+                b_t=_clean_field(_txt(bt_el)),
+                hometown=_clean_field(_txt(hometown_el)),
+                highschool=_clean_field(_txt(hs_el)),
+                previous_school=_clean_field(_txt(prev_el)),
+                img_url=img_url,
+            )
         )
 
     return rows
 
 
-async def fetch_html(page, url: str, config: ScraperConfig) -> tuple[str | None, int]:
+async def fetch_html(page, url: str, timeout_ms: int) -> tuple[str | None, int]:
     try:
-        resp = await page.goto(url, timeout=config.timeout_ms, wait_until="domcontentloaded")
+        resp = await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
         status = resp.status if resp else 0
 
         try:
-            await page.wait_for_selector(
-                'div[data-test-id="s-person-card-list__root"], .sidearm-roster-player, table.sidearm-table',
-                timeout=6000,
-            )
+            await page.wait_for_selector(ROSTER_WAIT_SELECTOR, timeout=6000)
         except Exception:
             pass
 
@@ -347,30 +374,19 @@ async def fetch_html(page, url: str, config: ScraperConfig) -> tuple[str | None,
 
 
 async def scrape_team(
-    browser, base: str, team_name: str, season: int, config: ScraperConfig
+    context: BrowserContext,
+    base: str,
+    team_name: str,
+    season: int,
+    timeout_ms: int,
 ) -> list[dict]:
     candidates = build_candidate_urls(base, season)
-
-    context = await browser.new_context(
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        viewport={"width": 1920, "height": 1080},
-    )
     page = await context.new_page()
-
-    if config.block_resources:
-        await page.route(
-            "**/*",
-            lambda route: (
-                route.abort()
-                if route.request.resource_type in BLOCKED_RESOURCE_TYPES
-                else route.continue_()
-            ),
-        )
 
     try:
         for url, hint in candidates:
             print(f"  {team_name}: trying {hint}")
-            html, status = await fetch_html(page, url, config)
+            html, status = await fetch_html(page, url, timeout_ms)
             if not html or status >= 400:
                 print(f"    {team_name}: HTTP {status} on {hint}")
                 continue
@@ -390,24 +406,42 @@ async def scrape_team(
                 return rows
             else:
                 print(f"    {team_name}: no players parsed on {hint}")
-
-            print(f"{team_name}: no working roster URL")
+        print(f"{team_name}: no working roster URL")
         return []
     finally:
         await page.close()
-        await context.close()
+
+
+async def scrape_team_task(
+    sem: asyncio.Semaphore,
+    context: BrowserContext,
+    base: str,
+    team_name: str,
+    season: int,
+    timeout_ms: int,
+    inter_team_delay_s: float,
+) -> list[dict]:
+    async with sem:
+        rows = await scrape_team(context, base, team_name, season, timeout_ms)
+        if inter_team_delay_s > 0:
+            await asyncio.sleep(inter_team_delay_s)
+        return rows
 
 
 async def main(
     season=2026,
     limit=None,
-    batch_size=5,
+    concurrency=20,
     missing_only=False,
     outdir=OUTDIR,
     team_name=None,
-    base_delay=0.0,
+    inter_team_delay_s=0.0,
+    timeout_ms=30000,
+    school_list_file=SCHOOL_LIST_FILE,
+    block_resources=True,
+    headless=True,
 ):
-    schools = await fetch_school_list()
+    schools = load_school_list(school_list_file)
 
     roster_targets = []
     for s in schools:
@@ -439,27 +473,47 @@ async def main(
     filtered = [(b, t) for (b, t) in roster_targets if t not in skip]
     print(f"{len(filtered)} teams to scrape for {season}")
 
-    config = ScraperConfig(
-        base_delay=base_delay,
-        block_resources=True,
-    )
-
     all_players = []
+    sem = asyncio.Semaphore(max(1, int(concurrency)))
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(headless=headless)
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            viewport={"width": 1920, "height": 1080},
+        )
+        if block_resources:
+            await context.route(
+                "**/*",
+                lambda route: (
+                    route.abort()
+                    if route.request.resource_type in BLOCKED_RESOURCE_TYPES
+                    else route.continue_()
+                ),
+            )
 
-        for i in range(0, len(filtered), batch_size):
-            batch = filtered[i : i + batch_size]
-            print(f"\nBatch {i // batch_size + 1}: {len(batch)} teams")
+        tasks = [
+            asyncio.create_task(
+                scrape_team_task(
+                    sem=sem,
+                    context=context,
+                    base=base,
+                    team_name=team,
+                    season=season,
+                    timeout_ms=timeout_ms,
+                    inter_team_delay_s=inter_team_delay_s,
+                )
+            )
+            for base, team in filtered
+        ]
+        completed = 0
+        for task in asyncio.as_completed(tasks):
+            rows = await task
+            all_players.extend(rows)
+            completed += 1
+            if completed % 25 == 0 or completed == len(tasks):
+                print(f"Progress: {completed}/{len(tasks)} teams")
 
-            tasks = [scrape_team(browser, base, team, season, config) for base, team in batch]
-            results = await asyncio.gather(*tasks)
-            for rows in results:
-                all_players.extend(rows)
-
-            if i + batch_size < len(filtered):
-                await asyncio.sleep(base_delay)
-
+        await context.close()
         await browser.close()
 
     df_new = pd.DataFrame(all_players)
@@ -471,9 +525,7 @@ async def main(
         df = df_new
 
     df.to_csv(outpath, index=False)
-    print(
-        f"Saved {len(df)} rows across {df['team'].nunique() if not df.empty else 0} teams -> {outpath}"
-    )
+    print(f"Saved {len(df)} rows across {df['team'].nunique() if not df.empty else 0} teams -> {outpath}")
     return df
 
 
@@ -482,22 +534,26 @@ if __name__ == "__main__":
     parser.add_argument("--season", type=int, default=2025, help="Season year")
     parser.add_argument("--team", type=str, default=None, help="Specific team name to scrape")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of teams")
-    parser.add_argument(
-        "--batch-size", type=int, default=5, help="Batch size for concurrent requests"
-    )
+    parser.add_argument("--concurrency", type=int, default=20, help="Concurrent teams")
     parser.add_argument("--missing-only", action="store_true", help="Only scrape missing teams")
     parser.add_argument("--outdir", type=str, default=OUTDIR, help="Output directory")
-    parser.add_argument("--base-delay", type=float, default=3.0, help="Base delay between batches")
+    parser.add_argument("--inter-team-delay-s", type=float, default=0.0, help="Delay after each team task")
+    parser.add_argument("--timeout-ms", type=int, default=30000, help="Page timeout in milliseconds")
+    parser.add_argument("--school-list-file", type=str, default=SCHOOL_LIST_FILE, help="School list json")
+    parser.add_argument("--no-block-resources", action="store_true", help="Load all resources")
+    parser.add_argument("--headed", action="store_true", help="Run non-headless Chromium")
     args = parser.parse_args()
 
-    df = asyncio.run(
-        main(
-            season=args.season,
-            team_name=args.team,
-            limit=args.limit,
-            batch_size=args.batch_size,
-            missing_only=args.missing_only,
-            outdir=args.outdir,
-            base_delay=args.base_delay,
-        )
-    )
+    df = asyncio.run(main(
+        season=args.season,
+        team_name=args.team,
+        limit=args.limit,
+        concurrency=args.concurrency,
+        missing_only=args.missing_only,
+        outdir=args.outdir,
+        inter_team_delay_s=args.inter_team_delay_s,
+        timeout_ms=args.timeout_ms,
+        school_list_file=args.school_list_file,
+        block_resources=not args.no_block_resources,
+        headless=not args.headed,
+    ))

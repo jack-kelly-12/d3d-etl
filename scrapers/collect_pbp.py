@@ -16,6 +16,8 @@ from .scraper_utils import (
 )
 
 logger = get_scraper_logger(__name__)
+ET_TZ = "America/New_York"
+PBP_LOOKBACK_DAYS = 3
 
 
 def load_existing(outdir, div, year):
@@ -27,14 +29,44 @@ def load_existing(outdir, div, year):
     return pd.DataFrame(), set()
 
 
+def no_data_ids_path(outdir, div, year):
+    return Path(outdir) / "_tmp" / f"d{div}_pbp_no_data_{year}.csv"
+
+
+def load_no_data_ids(outdir, div, year):
+    fpath = no_data_ids_path(outdir, div, year)
+    if not fpath.exists():
+        return set()
+    try:
+        df = pd.read_csv(fpath, usecols=["contest_id"])
+    except Exception:
+        return set()
+    s = pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int)
+    return set(s.tolist())
+
+
+def save_no_data_ids(outdir, div, year, contest_ids):
+    fpath = no_data_ids_path(outdir, div, year)
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    ids = sorted({int(x) for x in contest_ids})
+    pd.DataFrame({"contest_id": ids}).to_csv(fpath, index=False)
+
+
+def target_game_date_et():
+    return (
+        pd.Timestamp.now(tz=ET_TZ).normalize() - pd.Timedelta(days=PBP_LOOKBACK_DAYS)
+    ).tz_localize(None)
+
+
 def get_schedules(indir, div, year):
     fpath = Path(indir) / f"d{div}_schedules_{year}.csv"
     if fpath.exists():
         df = pd.read_csv(fpath, dtype={"contest_id": "Int64"})
 
         df = df.drop_duplicates(subset=["contest_id"])
-        today_et = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
-        df = df[pd.to_datetime(df["date"], errors="coerce") < today_et]
+        target_date = target_game_date_et()
+        df_dates = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+        df = df[df_dates == target_date]
         return df
 
     return pd.DataFrame()
@@ -137,7 +169,13 @@ def scrape_pbp(
             continue
 
         existing, done_ids = load_existing(outdir, div, year)
+        no_data_done_ids = load_no_data_ids(outdir, div, year)
         sched = sched[sched["contest_id"].notna()]
+        sched["contest_id"] = pd.to_numeric(sched["contest_id"], errors="coerce").astype("Int64")
+        sched = sched[sched["contest_id"].notna()]
+        sched = sched[~sched["contest_id"].astype(int).isin(no_data_done_ids)]
+        if no_data_done_ids:
+            logger.info(f"d{div} {year}: skipping {len(no_data_done_ids)} known no-data games")
 
         if missing_only:
             to_scrape = sched[~sched["contest_id"].isin(done_ids)]
@@ -171,6 +209,7 @@ def scrape_pbp(
                 total_games = job["total_games"]
 
                 rows = []
+                no_data_ids = set()
                 games_scraped = 0
                 fpath = outdir / f"d{div}_pbp_{year}.csv"
 
@@ -179,7 +218,7 @@ def scrape_pbp(
                     batch = to_scrape.iloc[start:end]
 
                     for _, r in batch.iterrows():
-                        gid = r["contest_id"]
+                        gid = int(r["contest_id"])
                         short_break_every(rest_every, games_scraped + 1, sleep_s=60.0)
                         df = scrape_game_pbp(session, gid, div, year)
                         games_scraped += 1
@@ -191,6 +230,7 @@ def scrape_pbp(
                             )
                         else:
                             logger.info(f"[{games_scraped}/{total_games}] game {gid}: no data")
+                            no_data_ids.add(gid)
 
                     logger.info(f"batch {start + 1}-{end} done")
                     cooldown_between_batches(end, total_games, float(batch_cooldown_s))
@@ -214,13 +254,17 @@ def scrape_pbp(
                     )
                     out.to_csv(fpath, index=False)
                     logger.info(f"saved {fpath} ({len(out)} total rows, {len(new_df)} new)")
+                if no_data_ids:
+                    all_no_data = no_data_done_ids | no_data_ids
+                    save_no_data_ids(outdir, div, year, all_no_data)
+                    logger.info(f"d{div} {year}: tracked {len(all_no_data)} no-data games")
         except HardBlockError as exc:
             logger.error(str(exc))
             return
 
 
 if __name__ == "__main__":
-    print("[start] scrapers.collect_pbp", flush=True)
+    logger.info("[start] scrapers.collect_pbp")
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
