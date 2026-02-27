@@ -344,7 +344,7 @@ def scrape_lineups(
         base_delay=base_delay,
         block_resources=True,
         daily_request_budget=daily_budget,
-        jitter_pct=0.4,
+        jitter_pct=0.8,
     )
 
     print("[trace] collect_lineups: opening ScraperSession", flush=True)

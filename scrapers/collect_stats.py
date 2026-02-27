@@ -158,7 +158,9 @@ def scrape_stats(
     run_remaining: bool = False,
     batch_size: int = 10,
     base_delay: float = 10.0,
-    jitter_pct: float = 0.6,
+    jitter_pct: float | None = None,
+    random_delay_min: float = 1.0,
+    random_delay_max: float = 30.0,
     daily_budget: int = 20000,
     batch_cooldown_s: int = 90,
 ):
@@ -175,7 +177,9 @@ def scrape_stats(
 
     config = ScraperConfig(
         base_delay=base_delay,
-        jitter_pct=jitter_pct,
+        jitter_pct=0.0 if jitter_pct is None else jitter_pct,
+        min_request_delay=random_delay_min,
+        max_request_delay=random_delay_max,
         block_resources=False,
         daily_request_budget=daily_budget,
     )
@@ -442,7 +446,9 @@ if __name__ == "__main__":
     parser.add_argument("--run_remaining", action="store_true")
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--base_delay", type=float, default=10.0)
-    parser.add_argument("--jitter_pct", type=float, default=0.6)
+    parser.add_argument("--jitter_pct", type=float, default=None)
+    parser.add_argument("--random_delay_min", type=float, default=1.0)
+    parser.add_argument("--random_delay_max", type=float, default=30.0)
     parser.add_argument("--daily_budget", type=int, default=20000)
     parser.add_argument("--batch_cooldown_s", type=int, default=90)
     args = parser.parse_args()
@@ -458,6 +464,8 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         base_delay=args.base_delay,
         jitter_pct=args.jitter_pct,
+        random_delay_min=args.random_delay_min,
+        random_delay_max=args.random_delay_max,
         daily_budget=args.daily_budget,
         batch_cooldown_s=args.batch_cooldown_s,
     )

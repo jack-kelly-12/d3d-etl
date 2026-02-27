@@ -45,11 +45,15 @@ class RateLimiter:
         self,
         base_delay: float = 2.0,
         jitter_pct: float = 0.3,
+        min_delay: float | None = None,
+        max_delay: float | None = None,
         backoff_base: float = 5.0,
         max_backoff: float = 300.0,
     ):
         self.base_delay = base_delay
         self.jitter_pct = jitter_pct
+        self.min_delay = min_delay
+        self.max_delay = max_delay
         self.backoff_base = backoff_base
         self.max_backoff = max_backoff
         self._consecutive_errors = 0
@@ -57,6 +61,10 @@ class RateLimiter:
         self._pause_until: float | None = None
 
     def _jittered_delay(self) -> float:
+        if self.min_delay is not None and self.max_delay is not None:
+            low = min(self.min_delay, self.max_delay)
+            high = max(self.min_delay, self.max_delay)
+            return random.uniform(low, high)
         jitter = random.uniform(-self.jitter_pct, self.jitter_pct)
         return self.base_delay * (1 + jitter)
 
@@ -258,6 +266,8 @@ def smart_block(route: Route):
 class ScraperConfig:
     base_delay: float = 2.0
     jitter_pct: float = 0.3
+    min_request_delay: float | None = None
+    max_request_delay: float | None = None
     max_retries: int = 3
     timeout_ms: int = 30000
     daily_request_budget: int | None = 20000
@@ -277,7 +287,10 @@ class ScraperSession:
     def __init__(self, config: ScraperConfig | None = None):
         self.config = config or ScraperConfig()
         self.rate_limiter = RateLimiter(
-            base_delay=self.config.base_delay, jitter_pct=self.config.jitter_pct
+            base_delay=self.config.base_delay,
+            jitter_pct=self.config.jitter_pct,
+            min_delay=self.config.min_request_delay,
+            max_delay=self.config.max_request_delay,
         )
         self.cache: RequestCache | None = None
         if self.config.cache_html and self.config.cache_dir:
@@ -508,7 +521,10 @@ class AsyncScraperSession:
     def __init__(self, config: ScraperConfig | None = None):
         self.config = config or ScraperConfig()
         self.rate_limiter = RateLimiter(
-            base_delay=self.config.base_delay, jitter_pct=self.config.jitter_pct
+            base_delay=self.config.base_delay,
+            jitter_pct=self.config.jitter_pct,
+            min_delay=self.config.min_request_delay,
+            max_delay=self.config.max_request_delay,
         )
         self._request_count = 0
         self._browser = None
