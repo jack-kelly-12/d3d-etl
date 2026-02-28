@@ -1,0 +1,148 @@
+name: collect_stats
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: d3d-etl-collect-stats
+  cancel-in-progress: false
+
+jobs:
+  collect-stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Install Xvfb (headed Playwright support)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: d3d-etl-collect-stats
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-duration-seconds: 43200
+
+      - name: Ensure output dirs exist
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
+        run: |
+          set -euo pipefail
+          OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
+          mkdir -p "$DATA_ROOT" "$OUTDIR"
+
+      - name: Optional S3 pre-pull
+        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          python -m s3_utils.sync_data \
+            --mode pull \
+            --bucket "$S3_BUCKET" \
+            --prefix "$S3_PREFIX" \
+            --local_dir "$DATA_ROOT" \
+            --region "$AWS_REGION"
+
+      - name: Run collect_stats scraper (all teams)
+        env:
+          YEARS: ${{ vars.YEARS }}
+          DIVISIONS: ${{ vars.DIVISIONS }}
+          TEAM_IDS_FILE: ${{ vars.TEAM_IDS_FILE }}
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
+          BASE_DELAY: ${{ vars.BASE_DELAY }}
+          DAILY_BUDGET: ${{ vars.DAILY_BUDGET }}
+          RANDOM_DELAY_MIN: ${{ vars.RANDOM_DELAY_MIN }}
+          RANDOM_DELAY_MAX: ${{ vars.RANDOM_DELAY_MAX }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${YEARS:-}" ]; then
+            echo "ERROR: vars.YEARS is empty (example: 2026)"
+            exit 1
+          fi
+          if [ -z "${DIVISIONS:-}" ]; then
+            echo "ERROR: vars.DIVISIONS is empty (example: 1,2,3)"
+            exit 1
+          fi
+
+          TEAM_IDS_FILE="${TEAM_IDS_FILE:-data/ncaa_team_history.csv}"
+          OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
+          BASE_DELAY="${BASE_DELAY:-10}"
+          DAILY_BUDGET="${DAILY_BUDGET:-20000}"
+          RANDOM_DELAY_MIN="${RANDOM_DELAY_MIN:-1.0}"
+          RANDOM_DELAY_MAX="${RANDOM_DELAY_MAX:-30.0}"
+
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
+          IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
+
+          for YEAR in "${YEARS_ARR[@]}"; do
+            xvfb-run -a python -u -m scrapers.collect_stats \
+              --year "$YEAR" \
+              --divisions "${DIVS_ARR[@]}" \
+              --team_ids_file "$TEAM_IDS_FILE" \
+              --outdir "$OUTDIR" \
+              --base_delay "$BASE_DELAY" \
+              --daily_budget "$DAILY_BUDGET" \
+              --random_delay_min "$RANDOM_DELAY_MIN" \
+              --random_delay_max "$RANDOM_DELAY_MAX" \
+              --run_all
+          done
+
+      - name: Always upload collect_stats outputs to S3
+        if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_SSE_MODE: ${{ vars.S3_SSE_MODE }}
+          S3_SSE_KMS_KEY_ID: ${{ vars.S3_SSE_KMS_KEY_ID }}
+        run: |
+          set -euo pipefail
+
+          OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
+          EXTRA_ARGS=()
+          if [ -n "${S3_SSE_MODE:-}" ]; then EXTRA_ARGS+=(--sse_mode "$S3_SSE_MODE"); fi
+          if [ -n "${S3_SSE_KMS_KEY_ID:-}" ]; then EXTRA_ARGS+=(--sse_kms_key_id "$S3_SSE_KMS_KEY_ID"); fi
+
+          python -m s3_utils.sync_data \
+            --mode push \
+            --bucket "$S3_BUCKET" \
+            --prefix "${S3_PREFIX%/}/stats" \
+            --local_dir "$OUTDIR" \
+            --region "$AWS_REGION" \
+            "${EXTRA_ARGS[@]}"
