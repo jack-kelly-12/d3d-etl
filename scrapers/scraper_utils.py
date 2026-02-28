@@ -209,6 +209,22 @@ ALLOWED_3P_HOST_SUBSTRINGS = {
     "akamaihd.net",
 }
 
+STEALTH_CHROMIUM_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+]
+
+STEALTH_JS = """\
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+if (!window.chrome) window.chrome = {};
+if (!window.chrome.runtime) window.chrome.runtime = {};
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [1, 2, 3, 4, 5],
+});
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+});
+"""
+
 
 def looks_like_block_page(html: str | None) -> bool:
     if not html:
@@ -279,7 +295,7 @@ class ScraperConfig:
     accept_downloads: bool = False
     user_agent: str = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
 
 
@@ -320,7 +336,10 @@ class ScraperSession:
 
     def __enter__(self):
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.config.headless)
+        self._browser = self._playwright.chromium.launch(
+            headless=self.config.headless,
+            args=STEALTH_CHROMIUM_ARGS,
+        )
         self._context = self._browser.new_context(
             user_agent=self.config.user_agent,
             viewport={"width": 1920, "height": 1080},
@@ -329,6 +348,7 @@ class ScraperSession:
             timezone_id="America/Chicago",
         )
         self._context.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
+        self._context.add_init_script(STEALTH_JS)
         self._page = self._context.new_page()
 
         if self.config.block_resources:

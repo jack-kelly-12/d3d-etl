@@ -38,7 +38,7 @@ def clean_stat_df(df: pd.DataFrame) -> pd.DataFrame:
     if "gdp" in df.columns:
         df = df.drop(columns=["gdp"])
 
-    df = df.rename(
+    return df.rename(
         columns={
             "slgpct": "slg_pct",
             "obpct": "ob_pct",
@@ -48,15 +48,12 @@ def clean_stat_df(df: pd.DataFrame) -> pd.DataFrame:
         }
     )
 
-    return df
-
 
 def parse_table(page, table, year, school, conference, div, team_id) -> list[dict[str, Any]]:
     headers = [th.inner_text().strip() for th in table.query_selector_all("thead th")]
     headers = [re.sub(r"[^0-9a-zA-Z]+", "_", h).strip("_").lower() for h in headers]
 
     rows: list[dict[str, Any]] = []
-
     for tr in table.query_selector_all("tbody tr"):
         tds = tr.query_selector_all("td")
         if not tds:
@@ -76,39 +73,31 @@ def parse_table(page, table, year, school, conference, div, team_id) -> list[dic
                     ncaa_id = None
                 player_url = BASE + href
 
-        row_dict.update(
-            {
-                "division": div,
-                "year": year,
-                "team_name": school,
-                "conference": conference,
-                "team_id": team_id,
-                "ncaa_id": ncaa_id,
-                "player_url": player_url,
-            }
-        )
+        row_dict.update({
+            "division": div,
+            "year": year,
+            "team_name": school,
+            "conference": conference,
+            "team_id": team_id,
+            "ncaa_id": ncaa_id,
+            "player_url": player_url,
+        })
         rows.append(row_dict)
 
     return rows
 
 
-def is_hard_block(status: int) -> bool:
-    return status in (403, 429, 430)
-
-
-def short_break_every(n: int, idx: int) -> None:
-    if n > 0 and idx > 0 and idx % n == 0:
-        time.sleep(60)
-
-
-def human_pause(min_s: float = 2.5, max_s: float = 7.5) -> None:
+def human_pause(min_s: float = 1.0, max_s: float = 3.0) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
-def hard_block_cooldown(min_minutes: int = 30, max_minutes: int = 90) -> None:
-    cooldown_seconds = int(random.uniform(min_minutes * 60, max_minutes * 60))
-    print(f"[cooldown] hard block detected, sleeping {cooldown_seconds}s before exit")
-    time.sleep(cooldown_seconds)
+def warm_session(session: ScraperSession) -> None:
+    print("[warmup] visiting stats.ncaa.org")
+    try:
+        session.page.goto(BASE, timeout=20000, wait_until="domcontentloaded")
+        time.sleep(random.uniform(3.0, 5.0))
+    except Exception:
+        pass
 
 
 def played_team_ids_path(played_team_ids_dir: Path, div: int, year: int) -> Path:
@@ -124,7 +113,7 @@ def season_to_date_stats_url(
     return url
 
 
-def load_played_team_ids(path: Path) -> set[int]:
+def load_team_ids_from_csv(path: Path) -> set[int]:
     if not path.exists():
         return set()
     try:
@@ -133,19 +122,201 @@ def load_played_team_ids(path: Path) -> set[int]:
         return set()
     if "team_id" not in df.columns:
         return set()
-    s = pd.to_numeric(df["team_id"], errors="coerce").dropna().astype(int)
-    return set(s.tolist())
+    return set(pd.to_numeric(df["team_id"], errors="coerce").dropna().astype(int).tolist())
 
 
-def load_processed_team_ids(path: Path) -> set[int]:
-    if not path.exists():
-        return set()
-    try:
-        df = pd.read_csv(path, usecols=["team_id"])
-    except Exception:
-        return set()
-    s = pd.to_numeric(df["team_id"], errors="coerce").dropna().astype(int)
-    return set(s.tolist())
+def _scrape_batting(
+    session: ScraperSession,
+    team_id: int,
+    year: int,
+    team_name: str,
+    conference: str,
+    div: int,
+) -> pd.DataFrame | None:
+    category = HITTING_CATEGORY_ID_2026 if year == 2026 else None
+    url = season_to_date_stats_url(team_id, year, category)
+    html, status = session.fetch(url, wait_selector="#stat_grid", wait_timeout=15000)
+
+    if not html or status >= 400:
+        print(f"FAILED batting: HTTP {status}")
+        return None
+
+    human_pause(0.3, 0.8)
+
+    table = session.page.query_selector("#stat_grid")
+    if not table:
+        print("FAILED batting: no #stat_grid")
+        return None
+
+    rows = parse_table(session.page, table, year, team_name, conference, div, team_id)
+    if not rows:
+        return None
+    return clean_stat_df(pd.DataFrame(rows))
+
+
+def _scrape_pitching(
+    session: ScraperSession,
+    team_id: int,
+    year: int,
+    team_name: str,
+    conference: str,
+    div: int,
+    batting_was_skipped: bool,
+) -> pd.DataFrame | None:
+    if year == 2026:
+        pitch_url = season_to_date_stats_url(team_id, year, PITCHING_CATEGORY_ID_2026)
+    else:
+        pitch_link = None
+        if not batting_was_skipped:
+            pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
+
+        if batting_was_skipped or not pitch_link:
+            base_url = season_to_date_stats_url(team_id, year)
+            html_base, status_base = session.fetch(
+                base_url, wait_selector="a.nav-link", wait_timeout=15000
+            )
+            if not html_base or status_base >= 400:
+                print(f"FAILED pitching: HTTP {status_base}")
+                return None
+            pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
+
+        if not pitch_link:
+            print("FAILED pitching: no Pitching tab")
+            return None
+
+        href = pitch_link.get_attribute("href") or ""
+        if not href:
+            print("FAILED pitching: tab missing href")
+            return None
+
+        pitch_url = BASE + href
+
+    html, status = session.fetch(pitch_url, wait_selector="#stat_grid", wait_timeout=15000)
+
+    if not html or status >= 400:
+        print(f"FAILED pitching: HTTP {status}")
+        return None
+
+    human_pause(0.3, 0.8)
+
+    table = session.page.query_selector("#stat_grid")
+    if not table:
+        print("FAILED pitching: no #stat_grid")
+        return None
+
+    rows = parse_table(session.page, table, year, team_name, conference, div, team_id)
+    if not rows:
+        return None
+    return clean_stat_df(pd.DataFrame(rows))
+
+
+def _process_division(
+    session: ScraperSession,
+    job: dict,
+    year: int,
+    batch_size: int,
+    batch_cooldown_s: int,
+    run_remaining: bool,
+) -> None:
+    div = job["div"]
+    teams_div = job["teams_div"]
+    batting_out = job["batting_out"]
+    pitching_out = job["pitching_out"]
+    done_batting = job["done_batting"]
+    done_pitching = job["done_pitching"]
+    played_ids_file = job["played_ids_file"]
+    total = len(teams_div)
+
+    if total == 0:
+        if played_ids_file and played_ids_file.exists():
+            played_ids_file.unlink()
+        return
+
+    print(f"    (budget remaining: {session.requests_remaining} requests)")
+
+    teams_processed = 0
+    next_long_break = random.randint(20, 30)
+    next_page_reset = random.randint(30, 50)
+    budget_exhausted = False
+
+    for start in range(0, total, batch_size):
+        if session.requests_remaining <= 0:
+            print("[budget] daily request budget exhausted, stopping")
+            budget_exhausted = True
+            break
+
+        end = min(start + batch_size, total)
+        batch = teams_div.iloc[start:end]
+        print(f"\n[batch] teams {start + 1}-{end} (budget: {session.requests_remaining})")
+
+        batch_batting: list[pd.DataFrame] = []
+        batch_pitching: list[pd.DataFrame] = []
+
+        for row in batch.itertuples(index=False):
+            if session.requests_remaining <= 0:
+                budget_exhausted = True
+                break
+
+            team_id = int(row.team_id)
+            team_name = getattr(row, "team_name", "")
+            conference = getattr(row, "conference", "")
+            skip_batting = run_remaining and team_id in done_batting
+            skip_pitching = run_remaining and team_id in done_pitching
+
+            print(f"[team] {team_name} ({team_id})")
+            teams_processed += 1
+
+            if not skip_batting:
+                df_bat = _scrape_batting(session, team_id, year, team_name, conference, div)
+                if df_bat is not None and not df_bat.empty:
+                    batch_batting.append(df_bat)
+                    print(f"OK batting -> queued {len(df_bat)} rows")
+                human_pause(1.0, 2.5)
+
+            if not skip_pitching:
+                df_pit = _scrape_pitching(
+                    session, team_id, year, team_name, conference, div, skip_batting
+                )
+                if df_pit is not None and not df_pit.empty:
+                    batch_pitching.append(df_pit)
+                    print(f"OK pitching -> queued {len(df_pit)} rows")
+                human_pause(1.0, 2.5)
+
+            if teams_processed >= next_long_break:
+                coffee = random.uniform(30, 90)
+                print(f"[break] sleeping {coffee:.1f}s after {teams_processed} teams")
+                time.sleep(coffee)
+                warm_session(session)
+                next_long_break += random.randint(20, 30)
+
+            if teams_processed >= next_page_reset:
+                print(f"[rotate] resetting browser page after {teams_processed} teams")
+                session.reset_page(clear_cookies=False)
+                warm_session(session)
+                next_page_reset += random.randint(30, 50)
+
+            human_pause(1.5, 4.0)
+
+        if batch_batting:
+            append_csv(batting_out, pd.concat(batch_batting, ignore_index=True))
+            print(f"[batch-write] batting -> appended {sum(len(x) for x in batch_batting)} rows")
+        if batch_pitching:
+            append_csv(pitching_out, pd.concat(batch_pitching, ignore_index=True))
+            print(
+                f"[batch-write] pitching -> appended {sum(len(x) for x in batch_pitching)} rows"
+            )
+
+        if end < total:
+            cooldown = int(batch_cooldown_s * random.uniform(0.6, 1.0))
+            print(f"\n[cooldown] sleeping {cooldown}s before next batch")
+            time.sleep(cooldown)
+
+    print(f"\n[done] division d{div} {year}")
+    print(f"  batting file:  {batting_out}")
+    print(f"  pitching file: {pitching_out}")
+    if played_ids_file and played_ids_file.exists() and not budget_exhausted:
+        played_ids_file.unlink()
+        print(f"  removed filter file: {played_ids_file}")
 
 
 def scrape_stats(
@@ -158,17 +329,14 @@ def scrape_stats(
     run_remaining: bool = False,
     batch_size: int = 10,
     base_delay: float = 10.0,
-    jitter_pct: float | None = None,
     random_delay_min: float = 1.0,
     random_delay_max: float = 30.0,
     daily_budget: int = 20000,
     batch_cooldown_s: int = 90,
 ):
     teams = pd.read_csv(team_ids_file)
-
-    teams["year"] = pd.to_numeric(teams["year"], errors="coerce").astype("Int64")
-    teams["division"] = pd.to_numeric(teams["division"], errors="coerce").astype("Int64")
-    teams["team_id"] = pd.to_numeric(teams["team_id"], errors="coerce").astype("Int64")
+    for col in ("year", "division", "team_id"):
+        teams[col] = pd.to_numeric(teams[col], errors="coerce").astype("Int64")
     teams = teams.dropna(subset=["year", "division", "team_id"])
 
     outdir_path = Path(outdir)
@@ -177,14 +345,13 @@ def scrape_stats(
 
     config = ScraperConfig(
         base_delay=base_delay,
-        jitter_pct=0.0 if jitter_pct is None else jitter_pct,
         min_request_delay=random_delay_min,
         max_request_delay=random_delay_max,
         block_resources=False,
         daily_request_budget=daily_budget,
     )
 
-    division_jobs = []
+    jobs = []
     for div in divisions:
         teams_div = teams.query("year == @year and division == @div").copy()
         if teams_div.empty:
@@ -195,241 +362,47 @@ def scrape_stats(
         batting_out = outdir_path / f"d{div}_batting_{year}.csv"
         pitching_out = outdir_path / f"d{div}_pitching_{year}.csv"
         played_ids_file = None
+
         if played_ids_dir_path is not None and not run_all:
             played_ids_file = played_team_ids_path(played_ids_dir_path, div, year)
-            played_ids = load_played_team_ids(played_ids_file)
+            played_ids = load_team_ids_from_csv(played_ids_file)
             if played_ids:
                 teams_div = teams_div[teams_div["team_id"].isin(played_ids)].copy()
             else:
                 teams_div = teams_div.iloc[0:0].copy()
 
-        done_batting_ids = load_processed_team_ids(batting_out) if run_remaining else set()
-        done_pitching_ids = load_processed_team_ids(pitching_out) if run_remaining else set()
-        done_ids = done_batting_ids & done_pitching_ids
-        scoped = (
-            teams_div[~teams_div["team_id"].isin(done_ids)].copy() if run_remaining else teams_div
-        )
+        done_batting = load_team_ids_from_csv(batting_out) if run_remaining else set()
+        done_pitching = load_team_ids_from_csv(pitching_out) if run_remaining else set()
+        done = done_batting & done_pitching
+        scoped = teams_div[~teams_div["team_id"].isin(done)].copy() if run_remaining else teams_div
         scoped = scoped.sample(frac=1.0, random_state=None).reset_index(drop=True)
 
         print(
-            f"\n=== d{div} {year} team stats — total {total_teams} | done {len(done_ids)} | remaining {len(scoped)} ==="
+            f"\n=== d{div} {year} team stats — "
+            f"total {total_teams} | done {len(done)} | remaining {len(scoped)} ==="
         )
 
-        division_jobs.append(
-            {
-                "div": div,
-                "teams_div": scoped,
-                "batting_out": batting_out,
-                "pitching_out": pitching_out,
-                "done_batting_ids": done_batting_ids,
-                "done_pitching_ids": done_pitching_ids,
-                "played_ids_file": played_ids_file,
-            }
-        )
+        jobs.append({
+            "div": div,
+            "teams_div": scoped,
+            "batting_out": batting_out,
+            "pitching_out": pitching_out,
+            "done_batting": done_batting,
+            "done_pitching": done_pitching,
+            "played_ids_file": played_ids_file,
+        })
 
-    if not any(len(job["teams_div"]) > 0 for job in division_jobs):
+    if not any(len(j["teams_div"]) > 0 for j in jobs):
         return
 
     with ScraperSession(config) as session:
         try:
-            for job in division_jobs:
-                div = job["div"]
-                teams_div = job["teams_div"]
-                batting_out = job["batting_out"]
-                pitching_out = job["pitching_out"]
-                done_batting_ids = job["done_batting_ids"]
-                done_pitching_ids = job["done_pitching_ids"]
-                played_ids_file = job["played_ids_file"]
-                total_teams = len(teams_div)
-                exhausted_budget = False
-                hard_blocked = False
-                teams_processed = 0
-                next_long_break_at = random.randint(15, 25)
-                next_page_reset_at = random.randint(20, 35)
-
-                if total_teams == 0:
-                    if played_ids_file and played_ids_file.exists():
-                        played_ids_file.unlink()
-                    continue
-
-                print(f"    (budget remaining: {session.requests_remaining} requests)")
-
-                for start in range(0, total_teams, batch_size):
-                    if session.requests_remaining <= 0:
-                        print("[budget] daily request budget exhausted, stopping")
-                        exhausted_budget = True
-                        break
-
-                    end = min(start + batch_size, total_teams)
-                    batch = teams_div.iloc[start:end]
-
-                    print(
-                        f"\n[batch] teams {start + 1}-{end} (budget: {session.requests_remaining})"
-                    )
-                    batch_batting_frames: list[pd.DataFrame] = []
-                    batch_pitching_frames: list[pd.DataFrame] = []
-
-                    for row in batch.itertuples(index=False):
-                        if session.requests_remaining <= 0:
-                            exhausted_budget = True
-                            break
-
-                        team_id = int(row.team_id)
-                        team_name = getattr(row, "team_name", "")
-                        conference = getattr(row, "conference", "")
-                        batting_done = run_remaining and team_id in done_batting_ids
-                        pitching_done = run_remaining and team_id in done_pitching_ids
-
-                        print(f"[team] {team_name} ({team_id})")
-                        teams_processed += 1
-
-                        if not batting_done:
-                            batting_category = HITTING_CATEGORY_ID_2026 if year == 2026 else None
-                            url = season_to_date_stats_url(team_id, year, batting_category)
-                            html, status = session.fetch(
-                                url, wait_selector="#stat_grid", wait_timeout=15000
-                            )
-
-                            if is_hard_block(status):
-                                print(f"[STOP] got hard block status {status}. Stopping for safety.")
-                                hard_block_cooldown()
-                                hard_blocked = True
-                                break
-
-                            if not html or status >= 400:
-                                print(f"FAILED batting: HTTP {status}")
-                                continue
-
-                            human_pause(0.8, 2.2)
-                            table = session.page.query_selector("#stat_grid")
-                            if not table:
-                                print("FAILED batting: no #stat_grid")
-                                continue
-
-                            rows_bat = parse_table(
-                                session.page, table, year, team_name, conference, div, team_id
-                            )
-                            if rows_bat:
-                                df_bat = clean_stat_df(pd.DataFrame(rows_bat))
-                                if not df_bat.empty:
-                                    batch_batting_frames.append(df_bat)
-                                    print(f"OK batting -> queued {len(df_bat)} rows")
-                            human_pause()
-
-                        if not pitching_done:
-                            if year == 2026:
-                                pitch_url = season_to_date_stats_url(
-                                    team_id, year, PITCHING_CATEGORY_ID_2026
-                                )
-                            else:
-                                pitch_link = None
-                                if not batting_done:
-                                    pitch_link = session.page.query_selector(
-                                        "a.nav-link:has-text('Pitching')"
-                                    )
-                                if batting_done or not pitch_link:
-                                    base_url = season_to_date_stats_url(team_id, year)
-                                    html_base, status_base = session.fetch(
-                                        base_url,
-                                        wait_selector="a.nav-link",
-                                        wait_timeout=15000,
-                                    )
-                                    if is_hard_block(status_base):
-                                        print(
-                                            f"[STOP] got hard block status {status_base}. Stopping for safety."
-                                        )
-                                        hard_block_cooldown()
-                                        hard_blocked = True
-                                        break
-                                    if not html_base or status_base >= 400:
-                                        print(f"FAILED pitching: HTTP {status_base}")
-                                        continue
-                                    pitch_link = session.page.query_selector(
-                                        "a.nav-link:has-text('Pitching')"
-                                    )
-                                if not pitch_link:
-                                    print("FAILED pitching: no Pitching tab")
-                                    continue
-
-                                href = pitch_link.get_attribute("href") or ""
-                                if not href:
-                                    print("FAILED pitching: tab missing href")
-                                    continue
-
-                                pitch_url = BASE + href
-                            html2, status2 = session.fetch(
-                                pitch_url, wait_selector="#stat_grid", wait_timeout=15000
-                            )
-
-                            if is_hard_block(status2):
-                                print(f"[STOP] got hard block status {status2}. Stopping for safety.")
-                                hard_block_cooldown()
-                                hard_blocked = True
-                                break
-
-                            if not html2 or status2 >= 400:
-                                print(f"FAILED pitching: HTTP {status2}")
-                                continue
-
-                            human_pause(0.8, 2.2)
-                            table2 = session.page.query_selector("#stat_grid")
-                            if not table2:
-                                print("FAILED pitching: no #stat_grid")
-                                continue
-
-                            rows_pit = parse_table(
-                                session.page, table2, year, team_name, conference, div, team_id
-                            )
-                            if rows_pit:
-                                df_pit = clean_stat_df(pd.DataFrame(rows_pit))
-                                if not df_pit.empty:
-                                    batch_pitching_frames.append(df_pit)
-                                    print(f"OK pitching -> queued {len(df_pit)} rows")
-                            human_pause()
-
-                        if teams_processed >= next_long_break_at:
-                            coffee_break = random.uniform(60, 180)
-                            print(f"[break] sleeping {coffee_break:.1f}s after {teams_processed} teams")
-                            time.sleep(coffee_break)
-                            next_long_break_at += random.randint(15, 25)
-
-                        if teams_processed >= next_page_reset_at:
-                            print(f"[rotate] resetting browser page after {teams_processed} teams")
-                            session.reset_page(clear_cookies=False)
-                            next_page_reset_at += random.randint(20, 35)
-
-                        human_pause(3.0, 10.0)
-
-                    if batch_batting_frames:
-                        append_csv(batting_out, pd.concat(batch_batting_frames, ignore_index=True))
-                        print(
-                            f"[batch-write] batting -> appended {sum(len(x) for x in batch_batting_frames)} rows"
-                        )
-                    if batch_pitching_frames:
-                        append_csv(
-                            pitching_out, pd.concat(batch_pitching_frames, ignore_index=True)
-                        )
-                        print(
-                            f"[batch-write] pitching -> appended {sum(len(x) for x in batch_pitching_frames)} rows"
-                        )
-                    if hard_blocked:
-                        return
-
-                    if end < total_teams:
-                        cooldown = int(batch_cooldown_s)
-                        print(f"\n[cooldown] sleeping {cooldown}s before next batch")
-                        time.sleep(cooldown)
-
-                print(f"\n[done] division d{div} {year}")
-                print(f"  batting file:  {batting_out}")
-                print(f"  pitching file: {pitching_out}")
-                if played_ids_file and played_ids_file.exists() and not exhausted_budget:
-                    played_ids_file.unlink()
-                    print(f"  removed filter file: {played_ids_file}")
+            warm_session(session)
+            for job in jobs:
+                _process_division(session, job, year, batch_size, batch_cooldown_s, run_remaining)
         except HardBlockError as exc:
             print(str(exc))
             print("[STOP] hard block detected. Stopping for safety.")
-            return
 
 
 if __name__ == "__main__":
@@ -446,9 +419,8 @@ if __name__ == "__main__":
     parser.add_argument("--run_remaining", action="store_true")
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--base_delay", type=float, default=10.0)
-    parser.add_argument("--jitter_pct", type=float, default=None)
     parser.add_argument("--random_delay_min", type=float, default=1.0)
-    parser.add_argument("--random_delay_max", type=float, default=30.0)
+    parser.add_argument("--random_delay_max", type=float, default=15.0)
     parser.add_argument("--daily_budget", type=int, default=20000)
     parser.add_argument("--batch_cooldown_s", type=int, default=90)
     args = parser.parse_args()
@@ -463,7 +435,6 @@ if __name__ == "__main__":
         run_remaining=args.run_remaining,
         batch_size=args.batch_size,
         base_delay=args.base_delay,
-        jitter_pct=args.jitter_pct,
         random_delay_min=args.random_delay_min,
         random_delay_max=args.random_delay_max,
         daily_budget=args.daily_budget,
