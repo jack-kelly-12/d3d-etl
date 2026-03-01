@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  collect-stats:
+  Collect Stats:
     runs-on: ubuntu-latest
     timeout-minutes: 720
     permissions:
@@ -59,26 +59,9 @@ jobs:
           OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
           mkdir -p "$DATA_ROOT" "$OUTDIR"
 
-      - name: Optional S3 pre-pull
-        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          S3_PREFIX: ${{ vars.S3_PREFIX }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          set -euo pipefail
-          python -m s3_utils.sync_data \
-            --mode pull \
-            --bucket "$S3_BUCKET" \
-            --prefix "$S3_PREFIX" \
-            --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
-
-      - name: Run collect_stats scraper (all teams)
+      - name: Run collect_stats scraper
         env:
           YEARS: ${{ vars.YEARS }}
-          DIVISIONS: ${{ vars.DIVISIONS }}
           TEAM_IDS_FILE: ${{ vars.TEAM_IDS_FILE }}
           DATA_ROOT: ${{ vars.DATA_ROOT }}
           NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
@@ -93,7 +76,6 @@ jobs:
             echo "ERROR: vars.YEARS is empty (example: 2026)"
             exit 1
           fi
-          DIVISIONS="${DIVISIONS:-2,3}"
 
           TEAM_IDS_FILE="${TEAM_IDS_FILE:-data/ncaa_team_history.csv}"
           OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
@@ -103,12 +85,11 @@ jobs:
           RANDOM_DELAY_MAX="${RANDOM_DELAY_MAX:-30.0}"
 
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
-          IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
           for YEAR in "${YEARS_ARR[@]}"; do
             xvfb-run -a python -u -m scrapers.collect_stats \
               --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
+              --divisions 2 3 \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$OUTDIR" \
               --base_delay "$BASE_DELAY" \
