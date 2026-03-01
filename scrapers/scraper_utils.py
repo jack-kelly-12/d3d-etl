@@ -293,6 +293,7 @@ class ScraperConfig:
     cache_dir: Path | None = None
     concurrency: int = 1
     accept_downloads: bool = False
+    browser_channel: str | None = "chrome"
     user_agent: str = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -338,6 +339,7 @@ class ScraperSession:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
             headless=self.config.headless,
+            channel=self.config.browser_channel,
             args=STEALTH_CHROMIUM_ARGS,
         )
         self._context = self._browser.new_context(
@@ -566,7 +568,11 @@ class AsyncScraperSession:
         return max(0, int(budget) - self._request_count)
 
     async def start(self, playwright):
-        self._browser = await playwright.chromium.launch(headless=self.config.headless)
+        self._browser = await playwright.chromium.launch(
+            headless=self.config.headless,
+            channel=self.config.browser_channel,
+            args=STEALTH_CHROMIUM_ARGS,
+        )
         return self
 
     async def close(self):
@@ -581,6 +587,7 @@ class AsyncScraperSession:
             timezone_id="America/Chicago",
         )
         await context.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
+        await context.add_init_script(STEALTH_JS)
         page = await context.new_page()
 
         if self.config.block_resources:
