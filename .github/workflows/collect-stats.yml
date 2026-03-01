@@ -1,4 +1,4 @@
-name: collect_stats
+name: Collect Stats
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  Collect Stats:
+  collect-stats:
     runs-on: ubuntu-latest
     timeout-minutes: 720
     permissions:
