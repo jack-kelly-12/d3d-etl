@@ -59,6 +59,22 @@ jobs:
           OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
           mkdir -p "$DATA_ROOT" "$OUTDIR"
 
+      - name: Optional S3 pre-pull
+        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          python -m s3_utils.sync_data \
+            --mode pull \
+            --bucket "$S3_BUCKET" \
+            --prefix "$S3_PREFIX" \
+            --local_dir "$DATA_ROOT" \
+            --region "$AWS_REGION"
+
       - name: Run collect_stats scraper
         env:
           YEARS: ${{ vars.YEARS }}
