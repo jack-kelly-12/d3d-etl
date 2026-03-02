@@ -1,5 +1,6 @@
 import argparse
 import html
+import random
 import re
 import time
 from datetime import datetime
@@ -35,6 +36,19 @@ def looks_blocked(html_text: str) -> bool:
     return any(p in t for p in pats)
 
 
+def human_pause(min_s: float = 1.0, max_s: float = 3.0) -> None:
+    time.sleep(random.uniform(min_s, max_s))
+
+
+def warm_session(session: ScraperSession) -> None:
+    print("[warmup] visiting stats.ncaa.org")
+    try:
+        session.page.goto(BASE, timeout=20000, wait_until="domcontentloaded")
+        time.sleep(random.uniform(3.0, 5.0))
+    except Exception:
+        pass
+
+
 def get_contests_from_pbp(indir, div, year):
     fpath = Path(indir) / f"d{div}_pbp_{year}.csv"
     if not fpath.exists():
@@ -45,8 +59,7 @@ def get_contests_from_pbp(indir, div, year):
         return pd.DataFrame()
     if "contest_id" not in df.columns:
         return pd.DataFrame()
-    df = df.dropna(subset=["contest_id"]).drop_duplicates(subset=["contest_id"])
-    return df
+    return df.dropna(subset=["contest_id"]).drop_duplicates(subset=["contest_id"])
 
 
 def _parse_team_header_text(card_header_el) -> tuple[int | None, str]:
@@ -76,8 +89,7 @@ def _extract_player_link_data(name_td_el) -> tuple[int, str] | None:
     if not m:
         return None
     ncaa_id = int(m.group(1))
-    name_text = (a.inner_text() or "").strip()
-    name_text = html.unescape(name_text)
+    name_text = html.unescape((a.inner_text() or "").strip())
     return ncaa_id, name_text
 
 
@@ -87,20 +99,12 @@ def _dedupe_hit(df: pd.DataFrame) -> pd.DataFrame:
     key = [
         c
         for c in [
-            "division",
-            "year",
-            "contest_id",
-            "team_id",
-            "ncaa_id",
-            "is_sub",
-            "jersey",
-            "position",
+            "division", "year", "contest_id", "team_id",
+            "ncaa_id", "is_sub", "jersey", "position",
         ]
         if c in df.columns
     ]
-    if not key:
-        return df
-    return df.drop_duplicates(subset=key, keep="last")
+    return df.drop_duplicates(subset=key, keep="last") if key else df
 
 
 def _dedupe_pit(df: pd.DataFrame) -> pd.DataFrame:
@@ -111,9 +115,7 @@ def _dedupe_pit(df: pd.DataFrame) -> pd.DataFrame:
         for c in ["division", "year", "contest_id", "team_id", "ncaa_id", "is_sub", "jersey"]
         if c in df.columns
     ]
-    if not key:
-        return df
-    return df.drop_duplicates(subset=key, keep="last")
+    return df.drop_duplicates(subset=key, keep="last") if key else df
 
 
 def _normalize_types(df: pd.DataFrame) -> pd.DataFrame:
@@ -136,8 +138,7 @@ def _existing_contest_ids(path: Path) -> set[int]:
         df = pd.read_csv(path, usecols=["contest_id"], dtype={"contest_id": "Int64"})
         if "contest_id" not in df.columns:
             return set()
-        s = pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int)
-        return set(s.tolist())
+        return set(pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int).tolist())
     except Exception:
         return set()
 
@@ -147,8 +148,7 @@ def completed_game_ids_from_csv(
 ) -> tuple[set[int], set[int], set[int]]:
     hit_done = _existing_contest_ids(hit_out)
     pit_done = _existing_contest_ids(pit_out)
-    both_done = hit_done & pit_done
-    return hit_done, pit_done, both_done
+    return hit_done, pit_done, hit_done & pit_done
 
 
 def _add_is_starter(pit_df: pd.DataFrame) -> pd.DataFrame:
@@ -156,7 +156,6 @@ def _add_is_starter(pit_df: pd.DataFrame) -> pd.DataFrame:
         return pit_df
 
     df = pit_df.copy()
-
     if "is_starter" in df.columns:
         df = df.drop(columns=["is_starter"])
 
@@ -168,12 +167,10 @@ def _add_is_starter(pit_df: pd.DataFrame) -> pd.DataFrame:
         .groupby(["contest_id", "team_id"], as_index=False)
         .head(1)[["_row"]]
     )
-
     if not starters.empty:
         df.loc[starters["_row"].values, "is_starter"] = 1
 
-    df = df.drop(columns=["_row"])
-    return df
+    return df.drop(columns=["_row"])
 
 
 def scrape_game_lineups(
@@ -191,6 +188,8 @@ def scrape_game_lineups(
         return pd.DataFrame(), pd.DataFrame(), 403, html_content
     if status >= 400:
         return pd.DataFrame(), pd.DataFrame(), status, html_content
+
+    human_pause(0.3, 0.8)
 
     page = session.page
     cards = page.query_selector_all("div.card")
@@ -234,32 +233,27 @@ def scrape_game_lineups(
         trs = tbl.query_selector_all("tbody tr")
         for tr in trs:
             tds = tr.query_selector_all("td")
-            if not tds:
-                continue
-            if idx_name is None or idx_name >= len(tds):
+            if not tds or idx_name is None or idx_name >= len(tds):
                 continue
 
             name_td = tds[idx_name]
-            name_td_html = name_td.inner_html() or ""
             link_data = _extract_player_link_data(name_td)
             if not link_data:
                 continue
 
             ncaa_id, player_name = link_data
-            is_sub = _is_indented_sub(name_td_html)
+            is_sub = _is_indented_sub(name_td.inner_html() or "")
 
             jersey = None
             if idx_num is not None and idx_num < len(tds):
-                raw_num = (tds[idx_num].inner_text() or "").strip()
-                raw_num = raw_num.replace("\u00a0", "").strip()
-                if raw_num != "":
+                raw_num = (tds[idx_num].inner_text() or "").strip().replace("\u00a0", "").strip()
+                if raw_num:
                     mnum = re.search(r"\d+", raw_num)
                     jersey = int(mnum.group(0)) if mnum else None
 
             pos = None
             if is_hitting and idx_pos is not None and idx_pos < len(tds):
-                pos = (tds[idx_pos].inner_text() or "").strip()
-                pos = pos.replace("\u00a0", "").strip() or None
+                pos = (tds[idx_pos].inner_text() or "").strip().replace("\u00a0", "").strip() or None
 
             base = {
                 "division": div,
@@ -283,6 +277,97 @@ def scrape_game_lineups(
     return hit_df, pit_df, status, html_content
 
 
+def _process_division(
+    session: ScraperSession,
+    job: dict,
+    year: int,
+    batch_size: int,
+    batch_cooldown_s: float,
+    missing_only: bool,
+) -> None:
+    div = job["div"]
+    hit_out = job["hit_out"]
+    pit_out = job["pit_out"]
+    games = job["games"]
+    total = len(games)
+
+    if total == 0:
+        return
+
+    print(f"    (budget remaining: {session.requests_remaining} requests)")
+
+    games_processed = 0
+    next_long_break = random.randint(20, 30)
+    next_page_reset = random.randint(30, 50)
+
+    for batch_start in range(0, total, batch_size):
+        if session.requests_remaining <= 0:
+            print("[budget] daily request budget exhausted, stopping")
+            break
+
+        batch = games[batch_start : batch_start + batch_size]
+        batch_end = batch_start + len(batch)
+        print(f"\n[batch] games {batch_start + 1}-{batch_end} (budget: {session.requests_remaining})")
+
+        hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
+
+        for gid in batch:
+            if session.requests_remaining <= 0:
+                break
+
+            if missing_only and gid in both_done:
+                continue
+
+            print(f"\n[game] {gid}")
+            games_processed += 1
+
+            hit_df, pit_df, status, _ = scrape_game_lineups(session, gid, div, year)
+
+            if status >= 400:
+                print(f"  failed: HTTP {status}")
+                human_pause(1.0, 2.5)
+                continue
+
+            wrote_hit = 0
+            wrote_pit = 0
+
+            if gid not in hit_done and not hit_df.empty:
+                append_csv(hit_out, _dedupe_hit(hit_df))
+                wrote_hit = len(hit_df)
+                hit_done.add(gid)
+
+            if gid not in pit_done and not pit_df.empty:
+                append_csv(pit_out, _dedupe_pit(pit_df))
+                wrote_pit = len(pit_df)
+                pit_done.add(gid)
+
+            print(f"  ok: hit={wrote_hit} pit={wrote_pit} (budget: {session.requests_remaining})")
+
+            if games_processed >= next_long_break:
+                coffee = random.uniform(30, 90)
+                print(f"[break] sleeping {coffee:.1f}s after {games_processed} games")
+                time.sleep(coffee)
+                warm_session(session)
+                next_long_break += random.randint(20, 30)
+
+            if games_processed >= next_page_reset:
+                print(f"[rotate] resetting browser page after {games_processed} games")
+                session.reset_page(clear_cookies=False)
+                warm_session(session)
+                next_page_reset += random.randint(30, 50)
+
+            human_pause(1.5, 4.0)
+
+        if batch_end < total:
+            cooldown = batch_cooldown_s * random.uniform(0.6, 1.0)
+            print(f"\n[cooldown] sleeping {cooldown:.1f}s before next batch")
+            time.sleep(cooldown)
+
+    print(f"\n[done] division d{div} {year}")
+    print(f"  batting file:  {hit_out}")
+    print(f"  pitching file: {pit_out}")
+
+
 def scrape_lineups(
     indir: str,
     outdir: str,
@@ -291,15 +376,15 @@ def scrape_lineups(
     missing_only: bool = False,
     batch_size: int = 25,
     base_delay: float = 10.0,
+    random_delay_min: float = 1.0,
+    random_delay_max: float = 15.0,
     daily_budget: int = 20000,
-    batch_cooldown_s: int = 90,
+    batch_cooldown_s: float = 90.0,
 ):
-    print("[trace] collect_lineups: initializing", flush=True)
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
 
-    division_jobs = []
-    print("[trace] collect_lineups: scanning pbp/progress", flush=True)
+    jobs = []
     for div in divisions:
         contests = get_contests_from_pbp(indir, div, year)
         if contests.empty:
@@ -312,123 +397,41 @@ def scrape_lineups(
 
         all_games = contests["contest_id"].tolist()
         games = [gid for gid in all_games if gid not in both_done] if missing_only else all_games
+        random.shuffle(games)
 
-        total_games = len(all_games)
-        remaining = len(games)
-
-        division_jobs.append(
-            {
-                "div": div,
-                "hit_out": hit_out,
-                "pit_out": pit_out,
-                "games": games,
-                "total_games": total_games,
-                "remaining": remaining,
-                "both_done_count": len(both_done),
-                "hit_done_count": len(hit_done),
-                "pit_done_count": len(pit_done),
-            }
-        )
-
-    for job in division_jobs:
         print(
-            f"\n=== d{job['div']} {year} lineups — total {job['total_games']} | done {job['both_done_count']} | remaining {job['remaining']} ==="
+            f"\n=== d{div} {year} lineups — "
+            f"total {len(all_games)} | done {len(both_done)} | remaining {len(games)} ==="
         )
-        print(f"    (hit done: {job['hit_done_count']} | pit done: {job['pit_done_count']})")
+        print(f"    (hit done: {len(hit_done)} | pit done: {len(pit_done)})")
 
-    if not any(job["remaining"] > 0 for job in division_jobs):
-        print("[trace] collect_lineups: no remaining games, exiting", flush=True)
+        jobs.append({
+            "div": div,
+            "hit_out": hit_out,
+            "pit_out": pit_out,
+            "games": games,
+        })
+
+    if not any(len(j["games"]) > 0 for j in jobs):
+        print("[done] no remaining games")
         return
 
     config = ScraperConfig(
         base_delay=base_delay,
+        min_request_delay=random_delay_min,
+        max_request_delay=random_delay_max,
         block_resources=True,
         daily_request_budget=daily_budget,
-        jitter_pct=0.8,
     )
 
-    print("[trace] collect_lineups: opening ScraperSession", flush=True)
     with ScraperSession(config) as session:
-        print("[trace] collect_lineups: ScraperSession ready", flush=True)
         try:
-            for job in division_jobs:
-                div = job["div"]
-                hit_out = job["hit_out"]
-                pit_out = job["pit_out"]
-                games = job["games"]
-                remaining = job["remaining"]
-
-                if remaining <= 0:
-                    continue
-
-                hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
-                print(f"    (budget remaining: {session.requests_remaining})")
-
-                for batch_start in range(0, remaining, batch_size):
-                    if session.requests_remaining <= 0:
-                        print("[budget] daily request budget exhausted, stopping")
-                        break
-
-                    batch = games[batch_start : batch_start + batch_size]
-                    batch_end = batch_start + len(batch)
-
-                    print(
-                        f"\n[batch] games {batch_start + 1}-{batch_end} (budget: {session.requests_remaining})"
-                    )
-
-                    hit_done, pit_done, both_done = completed_game_ids_from_csv(hit_out, pit_out)
-
-                    for gid in batch:
-                        if session.requests_remaining <= 0:
-                            break
-
-                        if missing_only and gid in both_done:
-                            continue
-
-                        print(f"\n[game] {gid}")
-
-                        hit_df, pit_df, status, html_content = scrape_game_lineups(
-                            session, gid, div, year
-                        )
-
-                        if status >= 400:
-                            print(f"  failed: HTTP {status}")
-                            continue
-
-                        wrote_hit = 0
-                        wrote_pit = 0
-
-                        if gid not in hit_done and not hit_df.empty:
-                            hit_df = _dedupe_hit(hit_df)
-                            append_csv(hit_out, hit_df)
-                            wrote_hit = len(hit_df)
-                            hit_done.add(gid)
-
-                        if gid not in pit_done and not pit_df.empty:
-                            pit_df = _dedupe_pit(pit_df)
-                            append_csv(pit_out, pit_df)
-                            wrote_pit = len(pit_df)
-                            pit_done.add(gid)
-
-                        if gid in hit_done and gid in pit_done:
-                            both_done.add(gid)
-
-                        print(
-                            f"  ok: hit={wrote_hit} pit={wrote_pit} (budget: {session.requests_remaining})"
-                        )
-
-                    if batch_end < remaining:
-                        cooldown = int(batch_cooldown_s)
-                        print(f"\n[cooldown] sleeping {cooldown}s before next batch")
-                        time.sleep(cooldown)
-
-                print(f"\n[done] division d{div} {year}")
-                print(f"  batting file:  {hit_out}")
-                print(f"  pitching file: {pit_out}")
+            warm_session(session)
+            for job in jobs:
+                _process_division(session, job, year, batch_size, batch_cooldown_s, missing_only)
         except HardBlockError as exc:
             print(str(exc))
             print("[STOP] hard block detected. Stopping scraper (CSV progress preserved).")
-            return
 
 
 if __name__ == "__main__":
@@ -436,17 +439,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
-    parser.add_argument(
-        "--missing_only",
-        action="store_true",
-        help="Only scrape contests missing from both lineup outputs",
-    )
+    parser.add_argument("--missing_only", action="store_true")
     parser.add_argument("--indir", default="/Users/jackkelly/Desktop/d3d-etl/data/pbp")
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/lineups")
     parser.add_argument("--batch_size", type=int, default=25)
     parser.add_argument("--base_delay", type=float, default=10.0)
+    parser.add_argument("--random_delay_min", type=float, default=1.0)
+    parser.add_argument("--random_delay_max", type=float, default=15.0)
     parser.add_argument("--daily_budget", type=int, default=20000)
-    parser.add_argument("--batch_cooldown_s", type=int, default=90)
+    parser.add_argument("--batch_cooldown_s", type=float, default=90.0)
     args = parser.parse_args()
 
     scrape_lineups(
@@ -457,6 +458,8 @@ if __name__ == "__main__":
         missing_only=args.missing_only,
         batch_size=args.batch_size,
         base_delay=args.base_delay,
+        random_delay_min=args.random_delay_min,
+        random_delay_max=args.random_delay_max,
         daily_budget=args.daily_budget,
         batch_cooldown_s=args.batch_cooldown_s,
     )

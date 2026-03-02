@@ -397,7 +397,7 @@ jobs:
   lineups-scraper:
     needs: pbp-scraper
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 4320
     permissions:
       contents: read
       id-token: write

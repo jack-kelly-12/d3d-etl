@@ -10,7 +10,7 @@ concurrency:
 jobs:
   collect-stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 4320
+    timeout-minutes: 360
     permissions:
       contents: read
       id-token: write
@@ -147,6 +147,15 @@ jobs:
               done
             fi
           done
+
+      - name: Refresh AWS credentials
+        if: always() && vars.S3_BUCKET != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: d3d-etl-collect-stats-upload
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-duration-seconds: 3600
 
       - name: Upload all stats to S3
         if: always() && vars.S3_BUCKET != ''
