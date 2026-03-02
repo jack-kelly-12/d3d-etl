@@ -10,7 +10,7 @@ concurrency:
 jobs:
   collect-stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 720
+    timeout-minutes: 4320
     permissions:
       contents: read
       id-token: write
@@ -37,7 +37,7 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chrome
 
-      - name: Install Xvfb (headed Playwright support)
+      - name: Install Xvfb
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
@@ -50,7 +50,8 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-duration-seconds: 43200
 
-      - name: Ensure output dirs exist
+      - name: Prepare output directory
+        id: dirs
         env:
           DATA_ROOT: ${{ vars.DATA_ROOT }}
           NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
@@ -58,33 +59,23 @@ jobs:
           set -euo pipefail
           OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
           mkdir -p "$DATA_ROOT" "$OUTDIR"
+          echo "outdir=$OUTDIR" >> "$GITHUB_OUTPUT"
 
-      - name: Optional S3 pre-pull
-        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          S3_PREFIX: ${{ vars.S3_PREFIX }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          set -euo pipefail
-          python -m s3_utils.sync_data \
-            --mode pull \
-            --bucket "$S3_BUCKET" \
-            --prefix "$S3_PREFIX" \
-            --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
-
-      - name: Run collect_stats scraper
+      - name: Scrape stats (d1 → d2 → d3)
         env:
           YEARS: ${{ vars.YEARS }}
           TEAM_IDS_FILE: ${{ vars.TEAM_IDS_FILE }}
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
+          OUTDIR: ${{ steps.dirs.outputs.outdir }}
           BASE_DELAY: ${{ vars.BASE_DELAY }}
           DAILY_BUDGET: ${{ vars.DAILY_BUDGET }}
           RANDOM_DELAY_MIN: ${{ vars.RANDOM_DELAY_MIN }}
           RANDOM_DELAY_MAX: ${{ vars.RANDOM_DELAY_MAX }}
+          SCRAPE_TIMEOUT: ${{ vars.SCRAPE_TIMEOUT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_SSE_MODE: ${{ vars.S3_SSE_MODE }}
+          S3_SSE_KMS_KEY_ID: ${{ vars.S3_SSE_KMS_KEY_ID }}
         run: |
           set -euo pipefail
 
@@ -94,29 +85,71 @@ jobs:
           fi
 
           TEAM_IDS_FILE="${TEAM_IDS_FILE:-data/ncaa_team_history.csv}"
-          OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
           BASE_DELAY="${BASE_DELAY:-10}"
           DAILY_BUDGET="${DAILY_BUDGET:-20000}"
           RANDOM_DELAY_MIN="${RANDOM_DELAY_MIN:-1.0}"
           RANDOM_DELAY_MAX="${RANDOM_DELAY_MAX:-30.0}"
+          SCRAPE_TIMEOUT="${SCRAPE_TIMEOUT:-21600}"
+
+          SSE_ARGS=""
+          if [ -n "${S3_SSE_MODE:-}" ]; then
+            SSE_ARGS="--sse $S3_SSE_MODE"
+            if [ -n "${S3_SSE_KMS_KEY_ID:-}" ]; then
+              SSE_ARGS="$SSE_ARGS --sse-kms-key-id $S3_SSE_KMS_KEY_ID"
+            fi
+          fi
+
+          if [ -n "${S3_BUCKET:-}" ]; then
+            (
+              while true; do
+                sleep 600
+                for f in "$OUTDIR"/d*_*; do
+                  [ -f "$f" ] && aws s3 cp "$f" "s3://${S3_BUCKET}/${S3_PREFIX%/}/stats/$(basename "$f")" $SSE_ARGS 2>/dev/null || true
+                done
+              done
+            ) &
+            SYNC_PID=$!
+            trap "kill $SYNC_PID 2>/dev/null || true" EXIT
+          fi
 
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
 
-          for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -u -m scrapers.collect_stats \
-              --year "$YEAR" \
-              --divisions 2 3 \
-              --team_ids_file "$TEAM_IDS_FILE" \
-              --outdir "$OUTDIR" \
-              --base_delay "$BASE_DELAY" \
-              --daily_budget "$DAILY_BUDGET" \
-              --random_delay_min "$RANDOM_DELAY_MIN" \
-              --random_delay_max "$RANDOM_DELAY_MAX" \
-              --run_all
+          for DIV in 1 2 3; do
+            echo ""
+            echo "=========================================="
+            echo "  Starting division $DIV (timeout: ${SCRAPE_TIMEOUT}s)"
+            echo "=========================================="
+
+            for YEAR in "${YEARS_ARR[@]}"; do
+              RC=0
+              timeout --signal=TERM "${SCRAPE_TIMEOUT}" \
+                xvfb-run -a python -u -m scrapers.collect_stats \
+                  --year "$YEAR" \
+                  --divisions "$DIV" \
+                  --team_ids_file "$TEAM_IDS_FILE" \
+                  --outdir "$OUTDIR" \
+                  --base_delay "$BASE_DELAY" \
+                  --daily_budget "$DAILY_BUDGET" \
+                  --random_delay_min "$RANDOM_DELAY_MIN" \
+                  --random_delay_max "$RANDOM_DELAY_MAX" \
+                  --run_all || RC=$?
+
+              if [ $RC -eq 124 ]; then
+                echo "[timeout] d${DIV} year ${YEAR} hit ${SCRAPE_TIMEOUT}s limit"
+                break
+              fi
+            done
+
+            if [ -n "${S3_BUCKET:-}" ]; then
+              echo "[upload] pushing d${DIV} files to S3"
+              for f in "$OUTDIR"/d${DIV}_*; do
+                [ -f "$f" ] && aws s3 cp "$f" "s3://${S3_BUCKET}/${S3_PREFIX%/}/stats/$(basename "$f")" $SSE_ARGS || true
+              done
+            fi
           done
 
-      - name: Always upload collect_stats outputs to S3
-        if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
+      - name: Upload all stats to S3
+        if: always() && vars.S3_BUCKET != ''
         env:
           DATA_ROOT: ${{ vars.DATA_ROOT }}
           NCAA_STATS_OUTDIR: ${{ vars.NCAA_STATS_OUTDIR }}
@@ -127,8 +160,8 @@ jobs:
           S3_SSE_KMS_KEY_ID: ${{ vars.S3_SSE_KMS_KEY_ID }}
         run: |
           set -euo pipefail
-
           OUTDIR="${NCAA_STATS_OUTDIR:-${DATA_ROOT%/}/stats}"
+
           EXTRA_ARGS=()
           if [ -n "${S3_SSE_MODE:-}" ]; then EXTRA_ARGS+=(--sse_mode "$S3_SSE_MODE"); fi
           if [ -n "${S3_SSE_KMS_KEY_ID:-}" ]; then EXTRA_ARGS+=(--sse_kms_key_id "$S3_SSE_KMS_KEY_ID"); fi
