@@ -61,6 +61,20 @@ jobs:
           mkdir -p "$DATA_ROOT" "$OUTDIR"
           echo "outdir=$OUTDIR" >> "$GITHUB_OUTPUT"
 
+      - name: Pull team history from S3
+        if: vars.S3_BUCKET != ''
+        env:
+          TEAM_IDS_FILE: ${{ vars.TEAM_IDS_FILE }}
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+        run: |
+          set -euo pipefail
+          TEAM_IDS_FILE="${TEAM_IDS_FILE:-data/ncaa_team_history.csv}"
+          BASENAME="$(basename "$TEAM_IDS_FILE")"
+          mkdir -p "$(dirname "$TEAM_IDS_FILE")"
+          aws s3 cp "s3://${S3_BUCKET}/${S3_PREFIX%/}/${BASENAME}" "$TEAM_IDS_FILE"
+
       - name: Scrape stats (d1 → d2 → d3)
         env:
           YEARS: ${{ vars.YEARS }}
