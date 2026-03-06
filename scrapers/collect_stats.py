@@ -1,4 +1,5 @@
 import argparse
+import math
 import random
 import re
 import time
@@ -6,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from selenium.webdriver.common.by import By
 
 from .constants import BASE
-from .scraper_utils import HardBlockError, ScraperConfig, ScraperSession
+from .scraper_utils import HardBlockError, ScraperConfig, UCScraperSession
 
 HITTING_CATEGORY_ID_2026 = 15867
 PITCHING_CATEGORY_ID_2026 = 15868
@@ -49,29 +51,29 @@ def clean_stat_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def parse_table(page, table, year, school, conference, div, team_id) -> list[dict[str, Any]]:
-    headers = [th.inner_text().strip() for th in table.query_selector_all("thead th")]
+def parse_table(table, year, school, conference, div, team_id) -> list[dict[str, Any]]:
+    headers = [th.text.strip() for th in table.find_elements(By.CSS_SELECTOR, "thead th")]
     headers = [re.sub(r"[^0-9a-zA-Z]+", "_", h).strip("_").lower() for h in headers]
 
     rows: list[dict[str, Any]] = []
-    for tr in table.query_selector_all("tbody tr"):
-        tds = tr.query_selector_all("td")
+    for tr in table.find_elements(By.CSS_SELECTOR, "tbody tr"):
+        tds = tr.find_elements(By.CSS_SELECTOR, "td")
         if not tds:
             continue
 
-        values = [td.inner_text().strip() for td in tds]
+        values = [td.text.strip() for td in tds]
         row_dict = dict(zip(headers, values, strict=False))
 
-        a = tr.query_selector("a[href*='/players/']")
+        a_els = tr.find_elements(By.CSS_SELECTOR, "a[href*='/players/']")
         ncaa_id, player_url = None, None
-        if a:
-            href = a.get_attribute("href") or ""
+        if a_els:
+            href = a_els[0].get_attribute("href") or ""
             if "/players/" in href:
                 try:
                     ncaa_id = int(href.split("/")[-1].split("?")[0])
                 except ValueError:
                     ncaa_id = None
-                player_url = BASE + href
+                player_url = href
 
         row_dict.update({
             "division": div,
@@ -91,10 +93,10 @@ def human_pause(min_s: float = 1.0, max_s: float = 3.0) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
-def warm_session(session: ScraperSession) -> None:
+def warm_session(session: UCScraperSession) -> None:
     print("[warmup] visiting stats.ncaa.org")
     try:
-        session.page.goto(BASE, timeout=20000, wait_until="domcontentloaded")
+        session.driver.get(BASE)
         time.sleep(random.uniform(3.0, 5.0))
     except Exception:
         pass
@@ -126,7 +128,7 @@ def load_team_ids_from_csv(path: Path) -> set[int]:
 
 
 def _scrape_batting(
-    session: ScraperSession,
+    session: UCScraperSession,
     team_id: int,
     year: int,
     team_name: str,
@@ -143,19 +145,19 @@ def _scrape_batting(
 
     human_pause(0.3, 0.8)
 
-    table = session.page.query_selector("#stat_grid")
-    if not table:
+    tables = session.driver.find_elements(By.CSS_SELECTOR, "#stat_grid")
+    if not tables:
         print("FAILED batting: no #stat_grid")
         return None
 
-    rows = parse_table(session.page, table, year, team_name, conference, div, team_id)
+    rows = parse_table(tables[0], year, team_name, conference, div, team_id)
     if not rows:
         return None
     return clean_stat_df(pd.DataFrame(rows))
 
 
 def _scrape_pitching(
-    session: ScraperSession,
+    session: UCScraperSession,
     team_id: int,
     year: int,
     team_name: str,
@@ -168,7 +170,8 @@ def _scrape_pitching(
     else:
         pitch_link = None
         if not batting_was_skipped:
-            pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
+            links = session.driver.find_elements(By.CSS_SELECTOR, "a.nav-link")
+            pitch_link = next((el for el in links if "Pitching" in (el.text or "")), None)
 
         if batting_was_skipped or not pitch_link:
             base_url = season_to_date_stats_url(team_id, year)
@@ -178,7 +181,8 @@ def _scrape_pitching(
             if not html_base or status_base >= 400:
                 print(f"FAILED pitching: HTTP {status_base}")
                 return None
-            pitch_link = session.page.query_selector("a.nav-link:has-text('Pitching')")
+            links = session.driver.find_elements(By.CSS_SELECTOR, "a.nav-link")
+            pitch_link = next((el for el in links if "Pitching" in (el.text or "")), None)
 
         if not pitch_link:
             print("FAILED pitching: no Pitching tab")
@@ -189,7 +193,7 @@ def _scrape_pitching(
             print("FAILED pitching: tab missing href")
             return None
 
-        pitch_url = BASE + href
+        pitch_url = href
 
     html, status = session.fetch(pitch_url, wait_selector="#stat_grid", wait_timeout=15000)
 
@@ -199,19 +203,19 @@ def _scrape_pitching(
 
     human_pause(0.3, 0.8)
 
-    table = session.page.query_selector("#stat_grid")
-    if not table:
+    tables = session.driver.find_elements(By.CSS_SELECTOR, "#stat_grid")
+    if not tables:
         print("FAILED pitching: no #stat_grid")
         return None
 
-    rows = parse_table(session.page, table, year, team_name, conference, div, team_id)
+    rows = parse_table(tables[0], year, team_name, conference, div, team_id)
     if not rows:
         return None
     return clean_stat_df(pd.DataFrame(rows))
 
 
 def _process_division(
-    session: ScraperSession,
+    session: UCScraperSession,
     job: dict,
     year: int,
     batch_size: int,
@@ -333,6 +337,9 @@ def scrape_stats(
     random_delay_max: float = 30.0,
     daily_budget: int = 20000,
     batch_cooldown_s: int = 90,
+    headless: bool = False,
+    chunk: int | None = None,
+    total_chunks: int | None = None,
 ):
     teams = pd.read_csv(team_ids_file)
     for col in ("year", "division", "team_id"):
@@ -349,6 +356,7 @@ def scrape_stats(
         max_request_delay=random_delay_max,
         block_resources=False,
         daily_request_budget=daily_budget,
+        headless=headless,
     )
 
     jobs = []
@@ -375,12 +383,24 @@ def scrape_stats(
         done_pitching = load_team_ids_from_csv(pitching_out) if run_remaining else set()
         done = done_batting & done_pitching
         scoped = teams_div[~teams_div["team_id"].isin(done)].copy() if run_remaining else teams_div
-        scoped = scoped.sample(frac=1.0, random_state=None).reset_index(drop=True)
 
-        print(
-            f"\n=== d{div} {year} team stats — "
-            f"total {total_teams} | done {len(done)} | remaining {len(scoped)} ==="
-        )
+        if chunk is not None and total_chunks is not None and total_chunks > 1:
+            scoped = scoped.sort_values("team_id").reset_index(drop=True)
+            chunk_size = math.ceil(len(scoped) / total_chunks)
+            start_idx = (chunk - 1) * chunk_size
+            scoped = scoped.iloc[start_idx : start_idx + chunk_size].copy()
+            print(
+                f"\n=== d{div} {year} team stats — "
+                f"total {total_teams} | done {len(done)} | "
+                f"chunk {chunk}/{total_chunks} ({len(scoped)} teams) ==="
+            )
+        else:
+            print(
+                f"\n=== d{div} {year} team stats — "
+                f"total {total_teams} | done {len(done)} | remaining {len(scoped)} ==="
+            )
+
+        scoped = scoped.sample(frac=1.0, random_state=None).reset_index(drop=True)
 
         jobs.append({
             "div": div,
@@ -395,7 +415,7 @@ def scrape_stats(
     if not any(len(j["teams_div"]) > 0 for j in jobs):
         return
 
-    with ScraperSession(config) as session:
+    with UCScraperSession(config) as session:
         try:
             warm_session(session)
             for job in jobs:
@@ -423,6 +443,9 @@ if __name__ == "__main__":
     parser.add_argument("--random_delay_max", type=float, default=15.0)
     parser.add_argument("--daily_budget", type=int, default=20000)
     parser.add_argument("--batch_cooldown_s", type=int, default=90)
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--chunk", type=int, default=None)
+    parser.add_argument("--total_chunks", type=int, default=None)
     args = parser.parse_args()
 
     scrape_stats(
@@ -439,4 +462,7 @@ if __name__ == "__main__":
         random_delay_max=args.random_delay_max,
         daily_budget=args.daily_budget,
         batch_cooldown_s=args.batch_cooldown_s,
+        headless=args.headless,
+        chunk=args.chunk,
+        total_chunks=args.total_chunks,
     )

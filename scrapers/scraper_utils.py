@@ -695,3 +695,186 @@ def cooldown_between_batches(batch_end: int, total: int, cooldown_s: float) -> N
 
 def retry_backoff_sleep(attempt: int, cap_s: float = 10.0) -> None:
     time.sleep(min(cap_s, 2.0 ** (attempt - 1) + 1.0))
+
+
+class UCScraperSession:
+    def __init__(self, config: ScraperConfig | None = None):
+        self.config = config or ScraperConfig()
+        self.rate_limiter = RateLimiter(
+            base_delay=self.config.base_delay,
+            jitter_pct=self.config.jitter_pct,
+            min_delay=self.config.min_request_delay,
+            max_delay=self.config.max_request_delay,
+        )
+        self._request_count = 0
+        self._driver = None
+        self._hard_blocked = False
+
+    @property
+    def hard_blocked(self) -> bool:
+        return self._hard_blocked
+
+    @property
+    def requests_made(self) -> int:
+        return self._request_count
+
+    @property
+    def requests_remaining(self) -> int | float:
+        budget = self.config.daily_request_budget
+        if budget is None:
+            return float("inf")
+        return max(0, int(budget) - self._request_count)
+
+    @staticmethod
+    def _detect_chrome_major_version() -> int | None:
+        import re as _re
+        import subprocess
+
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+        ]
+        for cmd in candidates:
+            try:
+                out = subprocess.run(
+                    [cmd, "--version"], capture_output=True, text=True, timeout=5
+                )
+                if out.returncode == 0:
+                    m = _re.search(r"(\d+)\.", out.stdout)
+                    if m:
+                        return int(m.group(1))
+            except Exception:
+                continue
+        return None
+
+    def __enter__(self):
+        import undetected_chromedriver as uc
+
+        options = uc.ChromeOptions()
+        if self.config.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--lang=en-US")
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
+        version_main = self._detect_chrome_major_version()
+        self._driver = uc.Chrome(options=options, version_main=version_main)
+        self._driver.set_page_load_timeout(self.config.timeout_ms / 1000)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._driver:
+            try:
+                self._driver.quit()
+            except Exception:
+                pass
+
+    @property
+    def driver(self):
+        if self._driver is None:
+            raise RuntimeError("Session not started. Use 'with UCScraperSession() as session:'")
+        return self._driver
+
+    def _extract_status(self, url: str) -> int:
+        try:
+            logs = self._driver.get_log("performance")
+            for entry in reversed(logs):
+                try:
+                    msg = json.loads(entry["message"])["message"]
+                    if msg["method"] == "Network.responseReceived":
+                        resp_url = msg["params"]["response"]["url"]
+                        if url.rstrip("/") in resp_url or resp_url.rstrip("/") in url:
+                            return msg["params"]["response"]["status"]
+                except (KeyError, json.JSONDecodeError):
+                    continue
+        except Exception:
+            pass
+        return 200
+
+    def fetch(
+        self,
+        url: str,
+        wait_selector: str | None = None,
+        wait_timeout: int | None = None,
+    ) -> tuple[str | None, int]:
+        if self._hard_blocked:
+            raise HardBlockError("Hard block already detected. Stopping scraper.")
+
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        self.rate_limiter.wait()
+        self._request_count += 1
+
+        wait_timeout_s = (wait_timeout or self.config.timeout_ms) / 1000
+
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                self.driver.get(url)
+                status = self._extract_status(url)
+
+                if status in RATE_LIMIT_STATUSES:
+                    self._hard_blocked = True
+                    self.rate_limiter.on_error(status)
+                    raise HardBlockError(
+                        f"Rate limit detected (HTTP {status}). Stopping scraper."
+                    )
+
+                if status in LONG_PAUSE_STATUSES:
+                    self.rate_limiter.on_error(status)
+                    if attempt < self.config.max_retries:
+                        continue
+                    return None, status
+
+                if status >= 400:
+                    self.rate_limiter.on_error(status)
+                    if attempt < self.config.max_retries:
+                        continue
+                    return None, status
+
+                if wait_selector:
+                    try:
+                        WebDriverWait(self.driver, wait_timeout_s).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, wait_selector))
+                        )
+                    except Exception:
+                        pass
+
+                self.rate_limiter.on_success()
+                html = self.driver.page_source
+
+                if looks_like_block_page(html):
+                    self._hard_blocked = True
+                    raise HardBlockError("Block page detected (soft block). Stopping scraper.")
+
+                return html, status
+
+            except HardBlockError:
+                raise
+            except Exception as e:
+                logger.info(f"  [fetch] attempt {attempt}/{self.config.max_retries} failed: {e}")
+                if attempt < self.config.max_retries:
+                    time.sleep(min(10.0, 2.0 ** (attempt - 1) + 1.0))
+                else:
+                    return None, 0
+
+        return None, 0
+
+    def reset_page(self, clear_cookies: bool = False) -> None:
+        if self._driver is None:
+            raise RuntimeError("Session not started.")
+        try:
+            self._driver.get("about:blank")
+        except Exception:
+            pass
+        if clear_cookies:
+            try:
+                self._driver.delete_all_cookies()
+            except Exception:
+                pass

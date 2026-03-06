@@ -7,6 +7,10 @@ concurrency:
   group: d3d-etl-collect-stats
   cancel-in-progress: false
 
+env:
+  TOTAL_CHUNKS: "5"
+  CHUNK_COOLDOWN: "120"
+
 jobs:
   collect-d1:
     runs-on: ubuntu-latest
@@ -25,22 +29,10 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chrome-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m playwright install --with-deps chrome
-
-      - name: Install Xvfb
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -93,16 +85,27 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
 
           for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -u -m scrapers.collect_stats \
-              --year "$YEAR" \
-              --divisions 1 \
-              --team_ids_file "${TEAM_IDS_FILE:-data/ncaa_team_history.csv}" \
-              --outdir "$OUTDIR" \
-              --base_delay "${BASE_DELAY:-10}" \
-              --daily_budget "${DAILY_BUDGET:-20000}" \
-              --random_delay_min "${RANDOM_DELAY_MIN:-1.0}" \
-              --random_delay_max "${RANDOM_DELAY_MAX:-30.0}" \
-              --run_all
+            for CHUNK in $(seq 1 "$TOTAL_CHUNKS"); do
+              echo "=== d1 year=$YEAR chunk $CHUNK/$TOTAL_CHUNKS ==="
+              python -u -m scrapers.collect_stats \
+                --year "$YEAR" \
+                --divisions 1 \
+                --team_ids_file "${TEAM_IDS_FILE:-data/ncaa_team_history.csv}" \
+                --outdir "$OUTDIR" \
+                --base_delay "${BASE_DELAY:-10}" \
+                --daily_budget "${DAILY_BUDGET:-20000}" \
+                --random_delay_min "${RANDOM_DELAY_MIN:-1.0}" \
+                --random_delay_max "${RANDOM_DELAY_MAX:-30.0}" \
+                --run_all \
+                --headless \
+                --chunk "$CHUNK" \
+                --total_chunks "$TOTAL_CHUNKS" || true
+
+              if [ "$CHUNK" -lt "$TOTAL_CHUNKS" ]; then
+                echo "=== Cooldown ${CHUNK_COOLDOWN}s before next chunk ==="
+                sleep "$CHUNK_COOLDOWN"
+              fi
+            done
           done
 
       - name: Upload d1 stats to S3
@@ -150,22 +153,10 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chrome-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m playwright install --with-deps chrome
-
-      - name: Install Xvfb
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -218,16 +209,27 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
 
           for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -u -m scrapers.collect_stats \
-              --year "$YEAR" \
-              --divisions 2 \
-              --team_ids_file "${TEAM_IDS_FILE:-data/ncaa_team_history.csv}" \
-              --outdir "$OUTDIR" \
-              --base_delay "${BASE_DELAY:-10}" \
-              --daily_budget "${DAILY_BUDGET:-20000}" \
-              --random_delay_min "${RANDOM_DELAY_MIN:-1.0}" \
-              --random_delay_max "${RANDOM_DELAY_MAX:-30.0}" \
-              --run_all
+            for CHUNK in $(seq 1 "$TOTAL_CHUNKS"); do
+              echo "=== d2 year=$YEAR chunk $CHUNK/$TOTAL_CHUNKS ==="
+              python -u -m scrapers.collect_stats \
+                --year "$YEAR" \
+                --divisions 2 \
+                --team_ids_file "${TEAM_IDS_FILE:-data/ncaa_team_history.csv}" \
+                --outdir "$OUTDIR" \
+                --base_delay "${BASE_DELAY:-10}" \
+                --daily_budget "${DAILY_BUDGET:-20000}" \
+                --random_delay_min "${RANDOM_DELAY_MIN:-1.0}" \
+                --random_delay_max "${RANDOM_DELAY_MAX:-30.0}" \
+                --run_all \
+                --headless \
+                --chunk "$CHUNK" \
+                --total_chunks "$TOTAL_CHUNKS" || true
+
+              if [ "$CHUNK" -lt "$TOTAL_CHUNKS" ]; then
+                echo "=== Cooldown ${CHUNK_COOLDOWN}s before next chunk ==="
+                sleep "$CHUNK_COOLDOWN"
+              fi
+            done
           done
 
       - name: Upload d2 stats to S3
@@ -275,22 +277,10 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chrome-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m playwright install --with-deps chrome
-
-      - name: Install Xvfb
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -343,16 +333,27 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
 
           for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -u -m scrapers.collect_stats \
-              --year "$YEAR" \
-              --divisions 3 \
-              --team_ids_file "${TEAM_IDS_FILE:-data/ncaa_team_history.csv}" \
-              --outdir "$OUTDIR" \
-              --base_delay "${BASE_DELAY:-10}" \
-              --daily_budget "${DAILY_BUDGET:-20000}" \
-              --random_delay_min "${RANDOM_DELAY_MIN:-1.0}" \
-              --random_delay_max "${RANDOM_DELAY_MAX:-30.0}" \
-              --run_all
+            for CHUNK in $(seq 1 "$TOTAL_CHUNKS"); do
+              echo "=== d3 year=$YEAR chunk $CHUNK/$TOTAL_CHUNKS ==="
+              python -u -m scrapers.collect_stats \
+                --year "$YEAR" \
+                --divisions 3 \
+                --team_ids_file "${TEAM_IDS_FILE:-data/ncaa_team_history.csv}" \
+                --outdir "$OUTDIR" \
+                --base_delay "${BASE_DELAY:-10}" \
+                --daily_budget "${DAILY_BUDGET:-20000}" \
+                --random_delay_min "${RANDOM_DELAY_MIN:-1.0}" \
+                --random_delay_max "${RANDOM_DELAY_MAX:-30.0}" \
+                --run_all \
+                --headless \
+                --chunk "$CHUNK" \
+                --total_chunks "$TOTAL_CHUNKS" || true
+
+              if [ "$CHUNK" -lt "$TOTAL_CHUNKS" ]; then
+                echo "=== Cooldown ${CHUNK_COOLDOWN}s before next chunk ==="
+                sleep "$CHUNK_COOLDOWN"
+              fi
+            done
           done
 
       - name: Upload d3 stats to S3
