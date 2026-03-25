@@ -21,63 +21,100 @@ def _run_command(cmd: list[str], cwd: Path) -> bool:
         return False
 
 
+def _ncaa_divs(cfg: PipelineConfig) -> list[str]:
+    """Convert integer divisions [1,2,3] to ncaa_* strings expected by most scrapers."""
+    return [f"ncaa_{d}" for d in cfg.divisions]
+
+
 def _build_year_commands(project_root: Path, year: int, cfg: PipelineConfig) -> list[list[str]]:
-    div_args = [str(d) for d in cfg.divisions]
-    common = ["--base_delay", str(cfg.base_delay), "--divisions", *div_args, "--year", str(year)]
+    ncaa_divs = _ncaa_divs(cfg)
 
     return [
         [
             sys.executable,
             "-m",
             "scrapers.collect_schedules",
-            *common,
-            "--team_ids_file",
-            str(cfg.team_ids_file),
-            "--outdir",
-            str(cfg.schedules_outdir),
-        ],
-        [
-            sys.executable,
-            "-m",
-            "scrapers.collect_stats",
-            *common,
-            "--team_ids_file",
-            str(cfg.team_ids_file),
-            "--outdir",
-            str(cfg.stats_outdir),
-            "--played_team_ids_dir",
-            str(cfg.schedules_outdir),
+            "--year", str(year),
+            "--divisions", *ncaa_divs,
+            "--team_ids_file", str(cfg.team_ids_file),
+            "--outdir", str(cfg.schedules_outdir),
+            "--base_delay", str(cfg.base_delay),
         ],
         [
             sys.executable,
             "-m",
             "scrapers.collect_game",
-            *common,
-            "--indir",
-            str(cfg.schedules_outdir),
-            "--pbp_outdir",
-            str(cfg.pbp_outdir),
-            "--lineups_outdir",
-            str(cfg.lineups_outdir),
+            "--year", str(year),
+            "--divisions", *ncaa_divs,
+            "--indir", str(cfg.schedules_outdir),
+            "--pbp_outdir", str(cfg.pbp_outdir),
+            "--lineups_outdir", str(cfg.lineups_outdir),
+            "--base_delay", str(cfg.base_delay),
+        ],
+    ]
+
+
+def _build_cube_commands(cfg: PipelineConfig) -> list[list[str]]:
+    years_args = [str(y) for y in cfg.years]
+    ncaa_divs = _ncaa_divs(cfg)
+    cube_stats_dir = cfg.data_root / "cube_stats"
+    team_history_file = cfg.data_root / "cube_team_history.csv"
+
+    cmds: list[list[str]] = [
+        [
+            sys.executable, "-m", "scrapers.collect_cube_team_history",
+            "--out_file", str(team_history_file),
+            "--years", *years_args,
+        ],
+    ]
+    for div in ncaa_divs:
+        cmds.append([
+            sys.executable, "-m", "scrapers.collect_cube_stats",
+            "--team_history_file", str(team_history_file),
+            "--division", div,
+            "--outdir", str(cube_stats_dir),
+            "--years", *years_args,
+            "--run_remaining",
+        ])
+    cmds.append([
+        sys.executable, "-m", "scrapers.collect_cube_player_info",
+        "--data_dir", str(cfg.data_root),
+        "--out_file", str(cube_stats_dir / "cube_player_info.csv"),
+        "--run_remaining",
+        "--years", *years_args,
+        "--divisions", *ncaa_divs,
+    ])
+    cmds.append([
+        sys.executable, "-m", "processors.reconcile_players",
+        "--data_dir", str(cfg.data_root),
+    ])
+    return cmds
+
+
+def _build_resolve_commands(cfg: PipelineConfig) -> list[list[str]]:
+    years_args = [str(y) for y in cfg.years]
+    ncaa_divs = _ncaa_divs(cfg)
+    return [
+        [
+            sys.executable, "-m", "processors.map_ncaa_to_cube",
+            "--data_dir", str(cfg.data_root),
+            "--years", *years_args,
+            "--divisions", *ncaa_divs,
         ],
     ]
 
 
 def _build_rankings_command(cfg: PipelineConfig) -> list[str]:
     years_args = [str(y) for y in cfg.years]
-    div_args = [str(d) for d in cfg.divisions]
+    int_divs = [str(d) for d in cfg.divisions]
     return [
         sys.executable,
         "-m",
         "scrapers.collect_rankings",
-        "--outdir",
-        str(cfg.rankings_data_dir),
-        "--years",
-        *years_args,
-        "--divisions",
-        *div_args,
-        "--base_delay",
-        str(cfg.base_delay),
+        "--outdir", str(cfg.rankings_data_dir),
+        "--years", *years_args,
+        "--divisions", *int_divs,
+        "--base_delay", str(cfg.base_delay),
     ]
 
 
@@ -99,6 +136,14 @@ def run_pipeline(cfg: PipelineConfig, project_root: Path) -> int:
             for cmd in _build_year_commands(project_root, year, cfg):
                 ok = _run_command(cmd, project_root)
                 any_failed = any_failed or (not ok)
+
+        for cmd in _build_cube_commands(cfg):
+            ok = _run_command(cmd, project_root)
+            any_failed = any_failed or (not ok)
+
+        for cmd in _build_resolve_commands(cfg):
+            ok = _run_command(cmd, project_root)
+            any_failed = any_failed or (not ok)
 
         rankings_cmd = _build_rankings_command(cfg)
         ok = _run_command(rankings_cmd, project_root)

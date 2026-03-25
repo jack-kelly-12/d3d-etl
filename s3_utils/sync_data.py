@@ -16,6 +16,10 @@ def main() -> int:
     parser.add_argument("--delete_extra", action="store_true")
     parser.add_argument("--sse_mode", default=None)
     parser.add_argument("--sse_kms_key_id", default=None)
+    parser.add_argument("--years", nargs="+", type=int, default=None,
+                        help="(pull) only download keys whose filename contains one of these years")
+    parser.add_argument("--include", nargs="+", dest="include_files", default=None,
+                        help="(push) only upload files with these exact filenames")
     args = parser.parse_args()
 
     if args.mode == "push":
@@ -27,6 +31,7 @@ def main() -> int:
             delete_extra=args.delete_extra,
             sse_mode=args.sse_mode,
             sse_kms_key_id=args.sse_kms_key_id,
+            include_files=args.include_files,
         )
         return 0
 
@@ -35,6 +40,7 @@ def main() -> int:
         prefix=args.prefix,
         local_dir=args.local_dir,
         region=args.region,
+        years=args.years,
     )
     return 0
 

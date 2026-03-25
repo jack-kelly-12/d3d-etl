@@ -67,14 +67,17 @@ jobs:
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          YEARS: ${{ vars.YEARS }}
         run: |
           set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           python -m s3_utils.sync_data \
             --mode pull \
             --bucket "$S3_BUCKET" \
             --prefix "$S3_PREFIX" \
             --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
+            --region "$AWS_REGION" \
+            --years "${YEARS_ARR[@]}"
 
       - name: Run schedules scraper (headed via Xvfb)
         env:
@@ -102,16 +105,19 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
+          NCAA_DIVS=()
+          for d in "${DIVS_ARR[@]}"; do NCAA_DIVS+=("ncaa_$d"); done
+
           for YEAR in "${YEARS_ARR[@]}"; do
             xvfb-run -a python -u -m scrapers.collect_schedules \
               --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
+              --divisions "${NCAA_DIVS[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
           done
 
-      - name: Upload schedules artifact for stats job
+      - name: Upload schedules artifact for game job
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -143,123 +149,10 @@ jobs:
             --region "$AWS_REGION" \
             "${EXTRA_ARGS[@]}"
 
-  bref-stats-scraper:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: d3d-etl-bref-stats-scraper
-          aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 43200
-
-      - name: Ensure stats dirs exist
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          STATS_OUTDIR: ${{ vars.STATS_OUTDIR }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$DATA_ROOT" "$STATS_OUTDIR"
-
-      - name: Optional S3 pre-pull
-        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          S3_PREFIX: ${{ vars.S3_PREFIX }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          set -euo pipefail
-          python -m s3_utils.sync_data \
-            --mode pull \
-            --bucket "$S3_BUCKET" \
-            --prefix "$S3_PREFIX" \
-            --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
-
-      - name: Run bref stats scraper (headless Chromium)
-        env:
-          YEARS: ${{ vars.YEARS }}
-          DIVISIONS: ${{ vars.DIVISIONS }}
-          STATS_OUTDIR: ${{ vars.STATS_OUTDIR }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${YEARS:-}" ]; then
-            echo "ERROR: vars.YEARS is empty (example: 2026)"
-            exit 1
-          fi
-          if [ -z "${DIVISIONS:-}" ]; then
-            echo "ERROR: vars.DIVISIONS is empty (example: 1,2,3)"
-            exit 1
-          fi
-
-          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
-          IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
-
-          for YEAR in "${YEARS_ARR[@]}"; do
-            python -u -m scrapers.collect_bref_stats \
-              --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
-              --conferences_csv data/baseball_reference_conferences.csv \
-              --outdir "$STATS_OUTDIR"
-          done
-
-      - name: Always upload bref stats outputs to S3
-        if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
-        env:
-          STATS_OUTDIR: ${{ vars.STATS_OUTDIR }}
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          S3_PREFIX: ${{ vars.S3_PREFIX }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          S3_SSE_MODE: ${{ vars.S3_SSE_MODE }}
-          S3_SSE_KMS_KEY_ID: ${{ vars.S3_SSE_KMS_KEY_ID }}
-        run: |
-          set -euo pipefail
-
-          EXTRA_ARGS=()
-          if [ -n "${S3_SSE_MODE:-}" ]; then EXTRA_ARGS+=(--sse_mode "$S3_SSE_MODE"); fi
-          if [ -n "${S3_SSE_KMS_KEY_ID:-}" ]; then EXTRA_ARGS+=(--sse_kms_key_id "$S3_SSE_KMS_KEY_ID"); fi
-
-          python -m s3_utils.sync_data \
-            --mode push \
-            --bucket "$S3_BUCKET" \
-            --prefix "${S3_PREFIX%/}/stats" \
-            --local_dir "$STATS_OUTDIR" \
-            --region "$AWS_REGION" \
-            "${EXTRA_ARGS[@]}"
-
-  pbp-scraper:
+  game-scraper:
     needs: schedules-scraper
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 4320
     permissions:
       contents: read
       id-token: write
@@ -274,28 +167,16 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Install Xvfb (headed Playwright support)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: d3d-etl-pbp-scraper
+          role-session-name: d3d-etl-game-scraper
           aws-region: ${{ secrets.AWS_REGION }}
           role-duration-seconds: 43200
 
@@ -304,9 +185,10 @@ jobs:
           DATA_ROOT: ${{ vars.DATA_ROOT }}
           SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
           PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
+          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
         run: |
           set -euo pipefail
-          mkdir -p "$DATA_ROOT" "$SCHEDULES_OUTDIR" "$PBP_OUTDIR"
+          mkdir -p "$DATA_ROOT" "$SCHEDULES_OUTDIR" "$PBP_OUTDIR" "$LINEUPS_OUTDIR"
 
       - name: Optional S3 pre-pull
         if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
@@ -315,14 +197,17 @@ jobs:
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          YEARS: ${{ vars.YEARS }}
         run: |
           set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           python -m s3_utils.sync_data \
             --mode pull \
             --bucket "$S3_BUCKET" \
             --prefix "$S3_PREFIX" \
             --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
+            --region "$AWS_REGION" \
+            --years "${YEARS_ARR[@]}"
 
       - name: Download schedules artifact
         uses: actions/download-artifact@v4
@@ -330,13 +215,14 @@ jobs:
           name: ncaa-schedules
           path: ${{ vars.SCHEDULES_OUTDIR }}
 
-      - name: Run PBP scraper (headed via Xvfb)
+      - name: Run game scraper (PBP + lineups)
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
           BASE_DELAY: ${{ vars.BASE_DELAY }}
           SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
           PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
+          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
         run: |
           set -euo pipefail
 
@@ -352,23 +238,18 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
-          for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -u -m scrapers.collect_pbp \
-              --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
-              --indir "$SCHEDULES_OUTDIR" \
-              --outdir "$PBP_OUTDIR" \
-              --base_delay "$BASE_DELAY" \
-              --missing_only
-          done
+          NCAA_DIVS=()
+          for d in "${DIVS_ARR[@]}"; do NCAA_DIVS+=("ncaa_$d"); done
 
-      - name: Upload pbp artifact for lineups job
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ncaa-pbp
-          path: ${{ vars.PBP_OUTDIR }}
-          if-no-files-found: warn
+          for YEAR in "${YEARS_ARR[@]}"; do
+            python -u -m scrapers.collect_game \
+              --year "$YEAR" \
+              --divisions "${NCAA_DIVS[@]}" \
+              --indir "$SCHEDULES_OUTDIR" \
+              --pbp_outdir "$PBP_OUTDIR" \
+              --lineups_outdir "$LINEUPS_OUTDIR" \
+              --base_delay "$BASE_DELAY"
+          done
 
       - name: Always upload pbp outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
@@ -393,112 +274,6 @@ jobs:
             --local_dir "$PBP_OUTDIR" \
             --region "$AWS_REGION" \
             "${EXTRA_ARGS[@]}"
-
-  lineups-scraper:
-    needs: pbp-scraper
-    runs-on: ubuntu-latest
-    timeout-minutes: 4320
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Install Xvfb (headed Playwright support)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: d3d-etl-lineups-scraper
-          aws-region: ${{ secrets.AWS_REGION }}
-          role-duration-seconds: 43200
-
-      - name: Ensure dirs exist
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
-          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$DATA_ROOT" "$PBP_OUTDIR" "$LINEUPS_OUTDIR"
-
-      - name: Optional S3 pre-pull
-        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          S3_PREFIX: ${{ vars.S3_PREFIX }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          set -euo pipefail
-          python -m s3_utils.sync_data \
-            --mode pull \
-            --bucket "$S3_BUCKET" \
-            --prefix "$S3_PREFIX" \
-            --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
-
-      - name: Download pbp artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ncaa-pbp
-          path: ${{ vars.PBP_OUTDIR }}
-
-      - name: Run lineups scraper (headed via Xvfb)
-        env:
-          YEARS: ${{ vars.YEARS }}
-          DIVISIONS: ${{ vars.DIVISIONS }}
-          BASE_DELAY: ${{ vars.BASE_DELAY }}
-          PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
-          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${YEARS:-}" ]; then
-            echo "ERROR: vars.YEARS is empty (example: 2026)"
-            exit 1
-          fi
-          if [ -z "${DIVISIONS:-}" ]; then
-            echo "ERROR: vars.DIVISIONS is empty (example: 1,2,3)"
-            exit 1
-          fi
-
-          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
-          IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
-
-          for YEAR in "${YEARS_ARR[@]}"; do
-            xvfb-run -a python -u -m scrapers.collect_lineups \
-              --year "$YEAR" \
-              --divisions "${DIVS_ARR[@]}" \
-              --indir "$PBP_OUTDIR" \
-              --outdir "$LINEUPS_OUTDIR" \
-              --base_delay "$BASE_DELAY" \
-              --missing_only
-          done
 
       - name: Always upload lineups outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
@@ -566,14 +341,17 @@ jobs:
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          YEARS: ${{ vars.YEARS }}
         run: |
           set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           python -m s3_utils.sync_data \
             --mode pull \
             --bucket "$S3_BUCKET" \
             --prefix "$S3_PREFIX" \
             --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
+            --region "$AWS_REGION" \
+            --years "${YEARS_ARR[@]}"
 
       - name: Scrape cube team history
         env:
@@ -619,13 +397,15 @@ jobs:
           set -euo pipefail
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
+          NCAA_DIVS=()
+          for d in "${DIVS_ARR[@]}"; do NCAA_DIVS+=("ncaa_$d"); done
           python -u -m scrapers.collect_cube_player_info \
             --data_dir "$DATA_ROOT" \
             --out_file "$DATA_ROOT/cube_stats/cube_player_info.csv" \
             --run_remaining \
             --workers 8 \
             --years "${YEARS_ARR[@]}" \
-            --divisions "${DIVS_ARR[@]}"
+            --divisions "${NCAA_DIVS[@]}"
 
       - name: Reconcile players if new IDs were scraped
         env:
@@ -664,7 +444,7 @@ jobs:
             "${EXTRA_ARGS[@]}"
 
   resolve-lineups:
-    needs: [lineups-scraper, cube-stats]
+    needs: [game-scraper, cube-stats]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -706,14 +486,17 @@ jobs:
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          YEARS: ${{ vars.YEARS }}
         run: |
           set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           python -m s3_utils.sync_data \
             --mode pull \
             --bucket "$S3_BUCKET" \
             --prefix "$S3_PREFIX" \
             --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
+            --region "$AWS_REGION" \
+            --years "${YEARS_ARR[@]}"
 
       - name: Resolve lineup player names to ncaa_id and cube_player_id
         env:
@@ -724,10 +507,12 @@ jobs:
           set -euo pipefail
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
+          NCAA_DIVS=()
+          for d in "${DIVS_ARR[@]}"; do NCAA_DIVS+=("ncaa_$d"); done
           python -u -m processors.map_ncaa_to_cube \
             --data_dir "$DATA_ROOT" \
             --years "${YEARS_ARR[@]}" \
-            --divisions "${DIVS_ARR[@]}"
+            --divisions "${NCAA_DIVS[@]}"
 
       - name: Upload resolved lineups to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
@@ -756,8 +541,8 @@ jobs:
             --bucket "$S3_BUCKET" \
             --prefix "${S3_PREFIX%/}" \
             --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION" \
             --include "ncaa_to_cube_player_map.csv" \
+            --region "$AWS_REGION" \
             "${EXTRA_ARGS[@]}"
 
   rankings-scraper:

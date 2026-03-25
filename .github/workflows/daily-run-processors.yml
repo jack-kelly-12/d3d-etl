@@ -55,14 +55,17 @@ jobs:
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_PREFIX: ${{ vars.S3_PREFIX }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          YEARS: ${{ vars.YEARS }}
         run: |
           set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           python -m s3_utils.sync_data \
             --mode pull \
             --bucket "$S3_BUCKET" \
             --prefix "$S3_PREFIX" \
             --local_dir "$DATA_ROOT" \
-            --region "$AWS_REGION"
+            --region "$AWS_REGION" \
+            --years "${YEARS_ARR[@]}"
 
       - name: Run processors
         env:
@@ -84,10 +87,13 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
+          NCAA_DIVS=()
+          for d in "${DIVS_ARR[@]}"; do NCAA_DIVS+=("ncaa_$d"); done
+
           python -u -m processors.run_all \
             --data_dir "$DATA_ROOT" \
             --years "${YEARS_ARR[@]}" \
-            --divisions "${DIVS_ARR[@]}"
+            --divisions "${NCAA_DIVS[@]}"
 
       - name: Always upload processors outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'

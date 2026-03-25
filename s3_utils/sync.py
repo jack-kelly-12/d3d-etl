@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import boto3
@@ -8,6 +9,21 @@ from botocore.exceptions import ClientError
 from scrapers.scraper_utils import get_scraper_logger
 
 logger = get_scraper_logger(__name__)
+
+_YEAR_RE = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+
+
+def _key_matches_years(key: str, years: list[int]) -> bool:
+    """Return True if the key should be downloaded given a year filter.
+
+    A key passes if it contains no 4-digit year, or if it contains at least
+    one year that is in *years*.
+    """
+    year_strs = {str(y) for y in years}
+    found = _YEAR_RE.findall(key)
+    if not found:
+        return True
+    return any(y in year_strs for y in found)
 
 
 def _iter_local_files(root: Path) -> list[Path]:
@@ -46,11 +62,15 @@ def sync_directory_to_s3(
     delete_extra: bool = False,
     sse_mode: str | None = None,
     sse_kms_key_id: str | None = None,
+    include_files: list[str] | None = None,
 ) -> int:
     local_root = Path(local_dir).expanduser().resolve()
     client = boto3.client("s3", region_name=region) if region else boto3.client("s3")
 
     files = _iter_local_files(local_root)
+    if include_files is not None:
+        include_set = set(include_files)
+        files = [f for f in files if f.name in include_set]
     logger.info(
         f"S3 push start: {len(files)} local files from {local_root} to s3://{bucket}/{prefix}"
     )
@@ -90,6 +110,7 @@ def sync_s3_prefix_to_directory(
     region: str | None = None,
     *,
     skip_forbidden: bool = False,
+    years: list[int] | None = None,
 ) -> int:
     """
     Pull objects from S3 to local.
@@ -110,6 +131,9 @@ def sync_s3_prefix_to_directory(
     logger.info(f"S3 pull start: {len(keys)} objects from s3://{bucket}/{prefix} to {local_root}")
 
     for _idx, key in enumerate(keys, start=1):
+        if years is not None and not _key_matches_years(key, years):
+            logger.debug(f"S3 pull skip (year filter): {key}")
+            continue
         rel = key[len(base_prefix) :] if base_prefix and key.startswith(base_prefix) else key
         if not rel:
             continue
