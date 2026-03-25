@@ -13,25 +13,26 @@ def norm_team(s: str) -> str:
 def build_team_to_sos(rankings_df, mappings):
     rk = rankings_df.copy()
 
-    for c in ("massey_team",):
+    rk = rk.rename(columns={"massey_team": "massey_team_name"})
+    for c in ("massey_team_name",):
         rk[c] = rk[c].astype(str).map(norm_team)
 
     mappings = mappings.copy()
-    for c in ("ncaa_team", "massey_team"):
+    for c in ("ncaa_team_name", "massey_team_name"):
         if c not in mappings.columns:
-            raise ValueError("team_mappings.csv must include columns: ncaa_team, massey_team")
+            raise ValueError("team_mappings.csv must include columns: ncaa_team_name, massey_team_name")
         mappings[c] = mappings[c].astype(str).map(norm_team)
 
     out = (
-        mappings[["ncaa_team", "massey_team"]]
+        mappings[["ncaa_team_name", "massey_team_name"]]
         .dropna()
         .merge(
-            rk[["massey_team", "sos_val"]].dropna().drop_duplicates("massey_team"),
-            on="massey_team",
+            rk[["massey_team_name", "sos_val"]].dropna().drop_duplicates("massey_team_name"),
+            on="massey_team_name",
             how="left",
         )
     )
-    return out[["ncaa_team", "sos_val"]]
+    return out[["ncaa_team_name", "sos_val"]]
 
 
 def sos_reward_punish(
@@ -51,11 +52,11 @@ def sos_reward_punish(
     for df_ in (batting_war, pitching_war):
         df_["team_name_norm"] = df_["team_name"].astype(str).map(norm_team)
 
-    b = batting_war.merge(t2s, left_on="team_name_norm", right_on="ncaa_team", how="left").drop(
-        columns=["ncaa_team"]
+    b = batting_war.merge(t2s, left_on="team_name_norm", right_on="ncaa_team_name", how="left").drop(
+        columns=["ncaa_team_name"]
     )
-    p = pitching_war.merge(t2s, left_on="team_name_norm", right_on="ncaa_team", how="left").drop(
-        columns=["ncaa_team"]
+    p = pitching_war.merge(t2s, left_on="team_name_norm", right_on="ncaa_team_name", how="left").drop(
+        columns=["ncaa_team_name"]
     )
 
     min_sos = pd.to_numeric(rankings_df["sos_val"], errors="coerce").min()

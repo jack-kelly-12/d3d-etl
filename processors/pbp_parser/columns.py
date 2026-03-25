@@ -122,7 +122,7 @@ def metadata(df: pd.DataFrame) -> tuple[np.ndarray, pd.Series, np.ndarray]:
     df["half"] = np.where(df["home_text"].isna() | (df["home_text"] == ""), "Top", "Bottom")
     df["play_description"] = (df["away_text"].fillna("") + df["home_text"].fillna("")).str.strip()
     df["play_description"] = df["play_description"].replace("", pd.NA)
-    df = df.dropna(subset=["play_description"])
+    df = df.dropna(subset=["play_description"]).copy()
     df["play_id"] = np.arange(1, len(df) + 1)
 
     return df
@@ -616,7 +616,7 @@ def classify_event_type(df: pd.DataFrame) -> pd.Series:
 
     result = [_classify(t, p, s) for t, p, s in zip(text, p1, sub_fl, strict=True)]
 
-    return pd.Series(result, index=df.index, dtype="int16")
+    return pd.Series(result, index=df.index)
 
 
 BATTED_BALL_EVENTS = {

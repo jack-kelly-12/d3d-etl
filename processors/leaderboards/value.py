@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 
-def load_guts(data_dir, year: int, division: int) -> pd.Series:
+def load_guts(data_dir, year: int, division: str) -> pd.Series:
     guts = pd.read_csv(data_dir / "guts/guts_constants.csv")
     row = guts[(guts["year"] == year) & (guts["division"] == division)]
     if row.empty:
@@ -108,10 +108,6 @@ def calculate_pitching_value(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     pitching = df[~df["pitcher_id"].isna()].copy()
 
-    pitching["pwpa"] = -pitching["wpa"]
-    pitching["prea"] = -pitching["rea"]
-    pitching["pwpa_li"] = np.where(pitching["li"] > 0, pitching["pwpa"] / pitching["li"], 0)
-
     player_stats = (
         pitching.groupby("pitcher_id")
         .agg(
@@ -119,24 +115,28 @@ def calculate_pitching_value(
                 "pitcher_name": "first",
                 "pitch_team_name": "first",
                 "pitch_team_id": "first",
-                "pwpa": "sum",
-                "prea": "sum",
-                "pwpa_li": "sum",
+                "wpa": "sum",
+                "rea": "sum",
+                "wpa_li": "sum",
                 "li": "mean",
             }
         )
         .reset_index()
     )
+    player_stats["wpa"] = -player_stats["wpa"]
+    player_stats["rea"] = -player_stats["rea"]
+    player_stats["wpa_li"] = -player_stats["wpa_li"]
 
+    pitching["pwpa"] = -pitching["wpa"]
     neg_wpa = pitching[pitching["pwpa"] < 0].groupby("pitcher_id")["pwpa"].sum()
     pos_wpa = pitching[pitching["pwpa"] > 0].groupby("pitcher_id")["pwpa"].sum()
 
     player_stats["neg_wpa"] = player_stats["pitcher_id"].map(neg_wpa).fillna(0)
     player_stats["pos_wpa"] = player_stats["pitcher_id"].map(pos_wpa).fillna(0)
-    player_stats["rew"] = player_stats["prea"] / runs_per_win
+    player_stats["rew"] = player_stats["rea"] / runs_per_win
     player_stats["clutch"] = np.where(
         player_stats["li"] > 0,
-        (player_stats["pwpa"] / player_stats["li"]) - player_stats["pwpa_li"],
+        (player_stats["wpa"] / player_stats["li"]) - player_stats["wpa_li"],
         np.nan,
     )
 
@@ -146,9 +146,6 @@ def calculate_pitching_value(
             "pitcher_name": "player_name",
             "pitch_team_name": "team_name",
             "pitch_team_id": "team_id",
-            "pwpa": "wpa",
-            "prea": "rea",
-            "pwpa_li": "wpa_li",
             "li": "pli",
         }
     )
@@ -158,21 +155,24 @@ def calculate_pitching_value(
         .agg(
             {
                 "pitch_team_name": "first",
-                "pwpa": "sum",
-                "prea": "sum",
-                "pwpa_li": "sum",
+                "wpa": "sum",
+                "rea": "sum",
+                "wpa_li": "sum",
                 "li": "mean",
             }
         )
         .reset_index()
     )
+    team_stats["wpa"] = -team_stats["wpa"]
+    team_stats["rea"] = -team_stats["rea"]
+    team_stats["wpa_li"] = -team_stats["wpa_li"]
 
     team_neg_wpa = pitching[pitching["pwpa"] < 0].groupby("pitch_team_id")["pwpa"].sum()
     team_pos_wpa = pitching[pitching["pwpa"] > 0].groupby("pitch_team_id")["pwpa"].sum()
 
     team_stats["neg_wpa"] = team_stats["pitch_team_id"].map(team_neg_wpa).fillna(0)
     team_stats["pos_wpa"] = team_stats["pitch_team_id"].map(team_pos_wpa).fillna(0)
-    team_stats["rew"] = team_stats["prea"] / runs_per_win
+    team_stats["rew"] = team_stats["rea"] / runs_per_win
 
     pitching_changes = (
         pitching[(pitching["sub_fl"] == 1) & (pitching["sub_pos"] == "p")]
@@ -185,7 +185,7 @@ def calculate_pitching_value(
 
     team_stats["clutch"] = np.where(
         team_stats["li"] > 0,
-        (team_stats["pwpa"] / team_stats["li"]) - team_stats["pwpa_li"],
+        (team_stats["wpa"] / team_stats["li"]) - team_stats["wpa_li"],
         np.nan,
     )
 
@@ -193,9 +193,6 @@ def calculate_pitching_value(
         columns={
             "pitch_team_id": "team_id",
             "pitch_team_name": "team_name",
-            "pwpa": "wpa",
-            "prea": "rea",
-            "pwpa_li": "wpa_li",
             "li": "pli",
         }
     )
@@ -231,7 +228,7 @@ def calculate_pitching_value(
     return player_stats[player_cols], team_stats[team_cols]
 
 
-def analyze_value(df: pd.DataFrame, data_dir, year: int, division: int) -> dict[str, pd.DataFrame]:
+def analyze_value(df: pd.DataFrame, data_dir, year: int, division: str) -> dict[str, pd.DataFrame]:
     guts = load_guts(data_dir, year, division)
     runs_per_win = guts.get("runs_win", 13.0)
 

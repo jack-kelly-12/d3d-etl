@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from processors.logging_utils import division_year_label, get_logger
+from processors.logging_utils import div_file_prefix, division_year_label, get_logger
 from processors.pbp_parser.constants import EventType
 
 logger = get_logger(__name__)
@@ -14,37 +14,31 @@ def calculate_linear_weights(pbp_data: pd.DataFrame, re24_matrix: pd.DataFrame) 
     event_counts = dict.fromkeys(event_types, 0)
     event_re24_sums = dict.fromkeys(event_types, 0.0)
 
-    out_events = {
-        EventType.GENERIC_OUT,
-        EventType.STRIKEOUT,
-        EventType.CAUGHT_STEALING,
-        EventType.PICKOFF,
-        EventType.FIELDERS_CHOICE,
-        EventType.STRIKEOUT_PASSED_BALL,
-        EventType.STRIKEOUT_WILD_PITCH,
+    out_values = {
+        EventType.GENERIC_OUT.value,
+        EventType.STRIKEOUT.value,
+        EventType.CAUGHT_STEALING.value,
+        EventType.PICKOFF.value,
+        EventType.FIELDERS_CHOICE.value,
+        EventType.STRIKEOUT_PASSED_BALL.value,
+        EventType.STRIKEOUT_WILD_PITCH.value,
     }
 
-    def map_event(event_val):
-        try:
-            ev = int(event_val)
-        except (ValueError, TypeError):
-            return "other"
+    event_map = {}
+    for v in out_values:
+        event_map[v] = "out"
+    event_map[EventType.WALK.value] = "walk"
+    event_map[EventType.INTENTIONAL_WALK.value] = "walk"
+    event_map[EventType.HIT_BY_PITCH.value] = "hit_by_pitch"
+    event_map[EventType.SINGLE.value] = "single"
+    event_map[EventType.DOUBLE.value] = "double"
+    event_map[EventType.TRIPLE.value] = "triple"
+    event_map[EventType.HOME_RUN.value] = "home_run"
 
-        if ev in out_events or ev in {e.value for e in out_events}:
-            return "out"
-        if ev == EventType.WALK or ev == EventType.INTENTIONAL_WALK:
-            return "walk"
-        if ev == EventType.HIT_BY_PITCH:
-            return "hit_by_pitch"
-        if ev == EventType.SINGLE:
-            return "single"
-        if ev == EventType.DOUBLE:
-            return "double"
-        if ev == EventType.TRIPLE:
-            return "triple"
-        if ev == EventType.HOME_RUN:
-            return "home_run"
-        return "other"
+    def map_event(event_val):
+        if pd.isna(event_val):
+            return "other"
+        return event_map.get(str(event_val), "other")
 
     re_bases_to_idx = {b: i for i, b in enumerate(re24_matrix["bases"])}
 
@@ -159,14 +153,14 @@ def calculate_normalized_linear_weights(
 
 def main(data_dir: str, year: int, divisions: list = None):
     if divisions is None:
-        divisions = [1, 2, 3]
+        divisions = ['ncaa_1', 'ncaa_2', 'ncaa_3']
     for division in divisions:
-        div_name = f"d{division}"
+        prefix = div_file_prefix(division)
         logger.info("Processing %s...", division_year_label(division, year))
 
-        pbp_path = Path(data_dir) / f"pbp/{div_name}_parsed_pbp_{year}.csv"
-        stats_path = Path(data_dir) / f"stats/{div_name}_batting_{year}.csv"
-        re_path = Path(data_dir) / f"miscellaneous/{div_name}_expected_runs_{year}.csv"
+        pbp_path = Path(data_dir) / f"pbp/{prefix}_parsed_pbp_{year}.csv"
+        stats_path = Path(data_dir) / f"cube_stats/{prefix}_batting_{year}.csv"
+        re_path = Path(data_dir) / f"miscellaneous/{prefix}_expected_runs_{year}.csv"
 
         if not pbp_path.exists():
             logger.warning("Play by play file not found: %s, skipping", pbp_path)
@@ -179,7 +173,7 @@ def main(data_dir: str, year: int, divisions: list = None):
         lw = calculate_linear_weights(pbp_data, re24_matrix)
         lw = calculate_normalized_linear_weights(lw, stats)
 
-        output_path = Path(data_dir) / f"miscellaneous/{div_name}_linear_weights_{year}.csv"
+        output_path = Path(data_dir) / f"miscellaneous/{prefix}_linear_weights_{year}.csv"
         lw.to_csv(output_path, index=False)
         logger.info("Saved linear weights to %s", output_path)
 
@@ -195,9 +189,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--divisions",
         nargs="+",
-        type=int,
-        default=[1, 2, 3],
-        help="Divisions to process (default: 1 2 3)",
+        type=str,
+        default=['ncaa_1', 'ncaa_2', 'ncaa_3'],
     )
     args = parser.parse_args()
     main(args.data_dir, args.year, args.divisions)

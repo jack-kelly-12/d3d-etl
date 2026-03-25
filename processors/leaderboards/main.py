@@ -51,7 +51,7 @@ def drop_empty_rows(df: pd.DataFrame, name: str) -> pd.DataFrame:
     return df
 
 
-def run_analysis(data_dir: Path, year: int, division: int) -> dict[str, pd.DataFrame]:
+def run_analysis(data_dir: Path, year: int, division: str) -> dict[str, pd.DataFrame]:
     pbp_df = load_pbp_with_hands(data_dir, year, division)
     weights = load_linear_weights(data_dir, division, year)
     guts = load_guts(data_dir, division, year)
@@ -81,10 +81,10 @@ def run_analysis(data_dir: Path, year: int, division: int) -> dict[str, pd.DataF
     return results
 
 
-def main(data_dir: str, year: int, divisions: list[int] = None):
+def main(data_dir: str, year: int, divisions: list[str] = None):
     data_dir = Path(data_dir)
     if divisions is None:
-        divisions = [1, 2, 3]
+        divisions = ['ncaa_1', 'ncaa_2', 'ncaa_3']
 
     leaderboards_dir = data_dir / "leaderboards"
     leaderboards_dir.mkdir(exist_ok=True)
@@ -190,36 +190,24 @@ def main(data_dir: str, year: int, divisions: list[int] = None):
                     combined = combined.drop_duplicates(subset=existing_cols)
 
                 if not team_history.empty and "team_id" in combined.columns:
-                    team_info = team_history[
-                        ["team_id", "division", "year", "org_id", "conference", "team_name"]
-                    ].drop_duplicates()
-                    team_info["team_id"] = pd.to_numeric(
-                        team_info["team_id"], errors="coerce"
-                    ).astype("Int64")
-                    team_info["division"] = pd.to_numeric(
-                        team_info["division"], errors="coerce"
-                    ).astype("Int64")
-                    team_info["year"] = pd.to_numeric(team_info["year"], errors="coerce").astype(
-                        "Int64"
-                    )
+                    combined["team_id"] = combined["team_id"].astype(str)
+                    combined["division"] = combined["division"].astype(str)
+                    combined["year"] = pd.to_numeric(combined["year"], errors="coerce").astype("Int64")
 
-                    combined["team_id"] = pd.to_numeric(
-                        combined["team_id"], errors="coerce"
-                    ).astype("Int64")
-                    combined["division"] = pd.to_numeric(
-                        combined["division"], errors="coerce"
-                    ).astype("Int64")
-                    combined["year"] = pd.to_numeric(combined["year"], errors="coerce").astype(
-                        "Int64"
-                    )
+                    th_cols = [c for c in ["team_id", "division", "year", "conference", "team_name"] if c in team_history.columns]
+                    team_info = team_history[th_cols].drop_duplicates().copy()
+                    team_info["team_id"] = team_info["team_id"].astype(str)
+                    team_info["division"] = team_info["division"].astype(str)
+                    team_info["year"] = pd.to_numeric(team_info["year"], errors="coerce").astype("Int64")
 
-                    combined = combined.drop(
-                        columns=["org_id", "conference", "team_name"], errors="ignore"
-                    )
-                    combined = combined.merge(
-                        team_info, on=["team_id", "division", "year"], how="left"
-                    )
-                    combined.dropna(subset=["team_id", "division"], inplace=True)
+                    overlap = set(combined["team_id"]) & set(team_info["team_id"])
+                    if overlap:
+                        # Pull conference (and team_name if missing) from team_history
+                        merge_cols = ["team_id", "division", "year"]
+                        pull_cols = [c for c in ["conference", "team_name"] if c in team_info.columns]
+                        combined = combined.drop(columns=pull_cols, errors="ignore")
+                        combined = combined.merge(team_info[merge_cols + pull_cols], on=merge_cols, how="left")
+                    # else: team_id format mismatch — keep existing team_name/conference as-is
 
                 combined.to_csv(existing_file, index=False)
                 logger.info("Saved %s: %s records", name, len(combined))
@@ -244,7 +232,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--year", required=True, type=int)
-    parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
+    parser.add_argument("--divisions", nargs="+", type=str, default=['ncaa_1', 'ncaa_2', 'ncaa_3'])
     args = parser.parse_args()
 
     main(args.data_dir, args.year, args.divisions)

@@ -524,6 +524,242 @@ jobs:
             --region "$AWS_REGION" \
             "${EXTRA_ARGS[@]}"
 
+  cube-stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4320
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: d3d-etl-cube-stats
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-duration-seconds: 43200
+
+      - name: Ensure dirs exist
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+        run: mkdir -p "$DATA_ROOT" "$DATA_ROOT/cube_stats"
+
+      - name: Optional S3 pre-pull
+        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          python -m s3_utils.sync_data \
+            --mode pull \
+            --bucket "$S3_BUCKET" \
+            --prefix "$S3_PREFIX" \
+            --local_dir "$DATA_ROOT" \
+            --region "$AWS_REGION"
+
+      - name: Scrape cube team history
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          YEARS: ${{ vars.YEARS }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
+          python -u -m scrapers.collect_cube_team_history \
+            --out_file "$DATA_ROOT/cube_team_history.csv" \
+            --years "${YEARS_ARR[@]}"
+
+      - name: Scrape cube stats (ncaa_1, ncaa_2, ncaa_3)
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          YEARS: ${{ vars.YEARS }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
+          for DIV in ncaa_1 ncaa_2 ncaa_3; do
+            echo "=== Scraping $DIV ==="
+            python -u -m scrapers.collect_cube_stats \
+              --team_history_file "$DATA_ROOT/cube_team_history.csv" \
+              --division "$DIV" \
+              --outdir "$DATA_ROOT/cube_stats" \
+              --years "${YEARS_ARR[@]}" \
+              --run_remaining
+          done
+
+      - name: Record existing player info count
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+        run: |
+          INFO="$DATA_ROOT/cube_stats/cube_player_info.csv"
+          echo "PLAYER_INFO_BEFORE=$([ -f "$INFO" ] && wc -l < "$INFO" || echo 0)" >> "$GITHUB_ENV"
+
+      - name: Scrape cube player info (8 threads)
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          YEARS: ${{ vars.YEARS }}
+          DIVISIONS: ${{ vars.DIVISIONS }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
+          IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
+          python -u -m scrapers.collect_cube_player_info \
+            --data_dir "$DATA_ROOT" \
+            --out_file "$DATA_ROOT/cube_stats/cube_player_info.csv" \
+            --run_remaining \
+            --workers 8 \
+            --years "${YEARS_ARR[@]}" \
+            --divisions "${DIVS_ARR[@]}"
+
+      - name: Reconcile players if new IDs were scraped
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+        run: |
+          set -euo pipefail
+          INFO="$DATA_ROOT/cube_stats/cube_player_info.csv"
+          AFTER=$([ -f "$INFO" ] && wc -l < "$INFO" || echo 0)
+          if [ "$AFTER" -gt "${PLAYER_INFO_BEFORE:-0}" ]; then
+            echo "New player IDs found (${PLAYER_INFO_BEFORE} -> ${AFTER}), running reconcile_players..."
+            python -u -m processors.reconcile_players --data_dir "$DATA_ROOT"
+          else
+            echo "No new player IDs, skipping reconcile_players"
+          fi
+
+      - name: Always upload cube stats to S3
+        if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_SSE_MODE: ${{ vars.S3_SSE_MODE }}
+          S3_SSE_KMS_KEY_ID: ${{ vars.S3_SSE_KMS_KEY_ID }}
+        run: |
+          set -euo pipefail
+          EXTRA_ARGS=()
+          if [ -n "${S3_SSE_MODE:-}" ]; then EXTRA_ARGS+=(--sse_mode "$S3_SSE_MODE"); fi
+          if [ -n "${S3_SSE_KMS_KEY_ID:-}" ]; then EXTRA_ARGS+=(--sse_kms_key_id "$S3_SSE_KMS_KEY_ID"); fi
+          python -m s3_utils.sync_data \
+            --mode push \
+            --bucket "$S3_BUCKET" \
+            --prefix "${S3_PREFIX%/}/cube_stats" \
+            --local_dir "$DATA_ROOT/cube_stats" \
+            --region "$AWS_REGION" \
+            "${EXTRA_ARGS[@]}"
+
+  resolve-lineups:
+    needs: [lineups-scraper, cube-stats]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: d3d-etl-resolve-lineups
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Ensure dirs exist
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+        run: mkdir -p "$DATA_ROOT"
+
+      - name: S3 pre-pull
+        if: vars.S3_PULL_BEFORE_RUN == 'true' && vars.S3_BUCKET != ''
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          python -m s3_utils.sync_data \
+            --mode pull \
+            --bucket "$S3_BUCKET" \
+            --prefix "$S3_PREFIX" \
+            --local_dir "$DATA_ROOT" \
+            --region "$AWS_REGION"
+
+      - name: Resolve lineup player names to ncaa_id and cube_player_id
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          YEARS: ${{ vars.YEARS }}
+          DIVISIONS: ${{ vars.DIVISIONS }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
+          IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
+          python -u -m processors.map_ncaa_to_cube \
+            --data_dir "$DATA_ROOT" \
+            --years "${YEARS_ARR[@]}" \
+            --divisions "${DIVS_ARR[@]}"
+
+      - name: Upload resolved lineups to S3
+        if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
+        env:
+          DATA_ROOT: ${{ vars.DATA_ROOT }}
+          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_SSE_MODE: ${{ vars.S3_SSE_MODE }}
+          S3_SSE_KMS_KEY_ID: ${{ vars.S3_SSE_KMS_KEY_ID }}
+        run: |
+          set -euo pipefail
+          EXTRA_ARGS=()
+          if [ -n "${S3_SSE_MODE:-}" ]; then EXTRA_ARGS+=(--sse_mode "$S3_SSE_MODE"); fi
+          if [ -n "${S3_SSE_KMS_KEY_ID:-}" ]; then EXTRA_ARGS+=(--sse_kms_key_id "$S3_SSE_KMS_KEY_ID"); fi
+          python -m s3_utils.sync_data \
+            --mode push \
+            --bucket "$S3_BUCKET" \
+            --prefix "${S3_PREFIX%/}/lineups" \
+            --local_dir "$LINEUPS_OUTDIR" \
+            --region "$AWS_REGION" \
+            "${EXTRA_ARGS[@]}"
+          python -m s3_utils.sync_data \
+            --mode push \
+            --bucket "$S3_BUCKET" \
+            --prefix "${S3_PREFIX%/}" \
+            --local_dir "$DATA_ROOT" \
+            --region "$AWS_REGION" \
+            --include "ncaa_to_cube_player_map.csv" \
+            "${EXTRA_ARGS[@]}"
+
   rankings-scraper:
     runs-on: ubuntu-latest
     timeout-minutes: 360

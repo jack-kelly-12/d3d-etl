@@ -54,7 +54,7 @@ def scrape_massey_rankings(
     for year in years:
         for div in divisions:
             url = build_url(year, div)
-            outpath = outdir / f"d{div}_rankings_{year}.csv"
+            outpath = outdir / f"{div}_rankings_{year}.csv"
 
             print(f"\n=== Massey export: year={year} div={div} ===")
             print(f"goto {url}")
@@ -136,7 +136,7 @@ def normalize_massey_rankings(df: pd.DataFrame, division: int, year: int) -> pd.
     cols = list(df.columns)
 
     base_cols = [
-        ("massey_team", cols[0]),
+        ("massey_team_name", cols[0]),
         ("conference", cols[1]),
         ("record", cols[2]),
         ("win_pct", cols[3]),

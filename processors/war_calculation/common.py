@@ -3,7 +3,8 @@ import pandas as pd
 
 
 def safe_divide(num, denom, fill=0.0):
-    return np.where(denom > 0, num / denom, fill)
+    safe_denom = np.where(denom != 0, denom, 1)
+    return np.where(denom != 0, num / safe_denom, fill)
 
 
 def ip_to_float(ip_str) -> float:

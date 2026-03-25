@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from processors.logging_utils import division_year_label, get_logger
+from processors.logging_utils import div_file_prefix, division_year_label, get_logger
 from processors.pbp_parser.constants import EventType
 
 logger = get_logger(__name__)
@@ -71,8 +71,8 @@ def calculate_baserunning_constants(pbp_df: pd.DataFrame) -> dict:
     run_sb = 0.2
     run_cs = -(2 * runs_out + 0.075)
 
-    sb_events = len(pbp_df[pbp_df["event_type"] == EventType.STOLEN_BASE])
-    cs_events = len(pbp_df[pbp_df["event_type"] == EventType.CAUGHT_STEALING])
+    sb_events = len(pbp_df[pbp_df["event_type"].eq(EventType.STOLEN_BASE.value)])
+    cs_events = len(pbp_df[pbp_df["event_type"].eq(EventType.CAUGHT_STEALING.value)])
 
     cs_rate = safe_divide(cs_events, sb_events + cs_events)
 
@@ -85,7 +85,6 @@ def calculate_baserunning_constants(pbp_df: pd.DataFrame) -> dict:
 
 def calculate_run_constants(pbp_df: pd.DataFrame) -> dict:
     """Calculate run environment constants."""
-    # Plate appearances = rows with a batter
     pa_events = pbp_df[pbp_df["bat_order"].notna()]
 
     runs_pa = safe_divide(pbp_df["runs_on_play"].sum(), len(pa_events))
@@ -118,15 +117,15 @@ def calculate_fip_constant(pitching_df: pd.DataFrame) -> float:
     return round(lg_era - fip_components, 3)
 
 
-def calculate_guts_constants(division: int, year: int, data_dir: Path) -> dict | None:
-    """Calculate all GUTS constants for a division/year."""
+def calculate_guts_constants(division: str, year: int, data_dir: Path) -> dict | None:
+    prefix = div_file_prefix(division)
     try:
         pbp_df = pd.read_csv(
-            data_dir / f"pbp/d{division}_pbp_with_metrics_{year}.csv", low_memory=False
+            data_dir / f"pbp/{prefix}_pbp_with_metrics_{year}.csv", low_memory=False
         )
-        lw_df = pd.read_csv(data_dir / f"miscellaneous/d{division}_linear_weights_{year}.csv")
-        pitching_df = pd.read_csv(data_dir / f"stats/d{division}_pitching_{year}.csv")
-        batting_df = pd.read_csv(data_dir / f"stats/d{division}_batting_{year}.csv")
+        lw_df = pd.read_csv(data_dir / f"miscellaneous/{prefix}_linear_weights_{year}.csv")
+        pitching_df = pd.read_csv(data_dir / f"cube_stats/{prefix}_pitching_{year}.csv")
+        batting_df = pd.read_csv(data_dir / f"cube_stats/{prefix}_batting_{year}.csv")
 
         constants = {
             "year": year,
@@ -149,7 +148,7 @@ def calculate_guts_constants(division: int, year: int, data_dir: Path) -> dict |
         return None
 
 
-def main(data_dir: str, year: int, divisions: list[int] = None):
+def main(data_dir: str, year: int, divisions: list[str] = None):
     """Calculate and save GUTS constants."""
     data_dir = Path(data_dir)
     guts_dir = data_dir / "guts"
@@ -158,7 +157,7 @@ def main(data_dir: str, year: int, divisions: list[int] = None):
     guts_file = guts_dir / "guts_constants.csv"
 
     if divisions is None:
-        divisions = [1, 2, 3]
+        divisions = ['ncaa_1', 'ncaa_2', 'ncaa_3']
 
     if guts_file.exists():
         existing = pd.read_csv(guts_file)
@@ -191,7 +190,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--year", required=True, type=int)
-    parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
+    parser.add_argument("--divisions", nargs="+", type=str, default=['ncaa_1', 'ncaa_2', 'ncaa_3'])
     args = parser.parse_args()
 
     main(args.data_dir, args.year, args.divisions)

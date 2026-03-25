@@ -119,37 +119,28 @@ def batting_runs(wraa_val, pa, pf, lg_rpa, conf_rpa):
 
 
 def position_adjustment(pos, gp, division):
-    games_per_season = 40 if division == 3 else 50
+    games_per_season = 40 if division == 'ncaa_3' else 50
     base = position_adjustments.get(str(pos).upper(), 0)
     return base * (gp / games_per_season)
 
 
 def replacement_runs(pa, total_pa, team_count, total_gs, rpw):
-    games_played = (total_gs / 9) / team_count
+    games_played = (total_gs * 2) / team_count
     rep_constant = (team_count / 2) * games_played - team_count * games_played * 0.294
     return (rep_constant * rpw) * safe_divide(pa, total_pa)
 
 
-def league_adjustment(batting_runs_val, wsb_val, adj, pa, lg_total, lg_pa):
-    conf_adj = -lg_total / lg_pa if lg_pa > 0 else 0
-    return conf_adj * pa
-
-
-def batting_war(
-    batting_runs_val, replacement_val, baserunning_val, adjustment_val, league_adj_val, rpw
-):
-    return (
-        batting_runs_val + replacement_val + baserunning_val + adjustment_val + league_adj_val
-    ) / rpw
-
-
 def get_batter_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = pbp_df.copy()
-    df["bat_team_id"] = pd.to_numeric(df["bat_team_id"], errors="coerce").astype("Int64")
 
     player_stats = (
         df.groupby("batter_id")
-        .agg({"rea": "sum", "wpa": "sum", "wpa_li": "sum", "li": "mean"})
+        .agg(
+            rea=("rea", "sum"),
+            wpa=("wpa", "sum"),
+            wpa_li=("wpa_li", "sum"),
+            li=("li", "mean"),
+        )
         .reset_index()
     )
 
@@ -161,18 +152,31 @@ def get_batter_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Data
 
     team_stats = (
         df.groupby("bat_team_id")
-        .agg({"rea": "sum", "wpa": "sum", "wpa_li": "sum", "li": "mean"})
+        .agg(
+            rea=("rea", "sum"),
+            wpa=("wpa", "sum"),
+            wpa_li=("wpa_li", "sum"),
+            li=("li", "mean"),
+        )
         .reset_index()
     )
 
     team_stats["clutch"] = np.where(
-        team_stats["li"] > 0, (team_stats["wpa"] / team_stats["li"]) - team_stats["wpa_li"], np.nan
+        team_stats["li"] > 0,
+        (team_stats["wpa"] / team_stats["li"]) - team_stats["wpa_li"],
+        np.nan,
     )
 
     return player_stats, team_stats
 
 
-def calculate_wgdp(pbp_df: pd.DataFrame) -> pd.DataFrame:
+def calculate_wgdp(pbp_df: pd.DataFrame, id_col: str = "batter_id") -> pd.DataFrame:
+    """Calculate GDP opportunities and wGDP grouped by batter or pitcher.
+
+    For batters: fewer GDPs than league average = positive wGDP (good).
+    For pitchers: call with id_col='pitcher_id' and negate wgdp (more GDPs = good).
+    GDP opportunity = batter up with runner on 1st and fewer than 2 outs.
+    """
     gdp_opps = pbp_df[
         (pbp_df["r1_id"].notna())
         & (pbp_df["r1_id"] != "")
@@ -183,14 +187,14 @@ def calculate_wgdp(pbp_df: pd.DataFrame) -> pd.DataFrame:
         gdp_opps["play_description"].str.contains("double play", case=False, na=False)
     ]
 
-    valid = gdp_opps["batter_id"].notna() & (gdp_opps["batter_id"] != "")
+    valid = gdp_opps[id_col].notna() & (gdp_opps[id_col] != "")
     gdp_opps = gdp_opps[valid]
-    gdp_events = gdp_events[gdp_events["batter_id"].notna() & (gdp_events["batter_id"] != "")]
+    gdp_events = gdp_events[gdp_events[id_col].notna() & (gdp_events[id_col] != "")]
 
     stats = pd.DataFrame(
         {
-            "gdp_opps": gdp_opps.groupby("batter_id").size(),
-            "gdp": gdp_events.groupby("batter_id").size(),
+            "gdp_opps": gdp_opps.groupby(id_col).size(),
+            "gdp": gdp_events.groupby(id_col).size(),
         }
     ).fillna(0)
 
@@ -209,9 +213,7 @@ def calculate_bfh(pbp_df: pd.DataFrame) -> pd.DataFrame:
         & (~bunt_plays["play_description"].str.contains("sacrifice", case=False, na=False))
     ]
 
-    stats = pd.DataFrame({"bfh": bunt_plays.groupby("batter_id").size()}).fillna(0)
-
-    return stats
+    return pd.DataFrame({"bfh": bunt_plays.groupby("batter_id").size()}).fillna(0)
 
 
 def add_runner_dests_from_shift(pbp_df: pd.DataFrame) -> pd.DataFrame:
@@ -247,11 +249,11 @@ def add_runner_dests_from_shift(pbp_df: pd.DataFrame) -> pd.DataFrame:
 
 def calculate_webt(pbp_df: pd.DataFrame, runs_out: float) -> pd.DataFrame:
     df = add_runner_dests_from_shift(pbp_df)
-    event_type = pd.to_numeric(df["event_type"], errors="coerce")
+    et = df["event_type"]
 
-    c_13 = df["r1_id"].notna() & (event_type == EventType.SINGLE.value)
-    c_2h = df["r2_id"].notna() & (event_type == EventType.SINGLE.value)
-    c_1h = df["r1_id"].notna() & (event_type == EventType.DOUBLE.value)
+    c_13 = df["r1_id"].notna() & (et.eq(EventType.SINGLE.value))
+    c_2h = df["r2_id"].notna() & (et.eq(EventType.SINGLE.value))
+    c_1h = df["r1_id"].notna() & (et.eq(EventType.DOUBLE.value))
 
     s_13 = c_13 & (df["r1_dest"] == 3)
     s_2h = c_2h & (df["r2_dest"] != 0)
@@ -337,10 +339,7 @@ def add_batting_stats(df: pd.DataFrame) -> pd.DataFrame:
         df["h"].sum() + df["bb"].sum() + df["hbp"].sum(),
         df["ab"].sum() + df["bb"].sum() + df["hbp"].sum() + df["sf"].sum(),
     )
-    lg_slg = safe_divide(
-        df["tb"].sum(),
-        df["ab"].sum(),
-    )
+    lg_slg = safe_divide(df["tb"].sum(), df["ab"].sum())
     df["ops_plus"] = ops_plus(df["ob_pct"], df["slg_pct"], lg_obp, lg_slg)
 
     return df
@@ -380,7 +379,7 @@ def calculate_batting_war(
     guts_df: pd.DataFrame,
     park_factors_df: pd.DataFrame,
     pbp_df: pd.DataFrame,
-    division: int,
+    division: str,
     year: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if batting_df.empty:
@@ -391,13 +390,10 @@ def calculate_batting_war(
 
     if "b_t" in df.columns:
         df[["bats", "throws"]] = df["b_t"].str.split("/", n=1, expand=True)
-        df["bats"] = df["bats"]
-        df["throws"] = df["throws"]
 
     df["pos"] = df["pos"].apply(lambda x: "" if pd.isna(x) else str(x).split("/")[0].upper())
     df = df[df["ab"] > 0].copy()
     df["gp"] = pd.to_numeric(df["gp"], errors="coerce").fillna(0).astype(int)
-    df["gs"] = pd.to_numeric(df["gs"], errors="coerce").fillna(0).astype(int)
 
     pf_map = park_factors_df.set_index("team_name")["pf"].to_dict()
     df["pf"] = df["team_name"].map(pf_map).fillna(100)
@@ -406,6 +402,7 @@ def calculate_batting_war(
     df = add_linear_weights(df, weights)
 
     gdp_stats = calculate_wgdp(pbp_df)
+    df = df.drop(columns=["gdp"], errors="ignore")  # cube stats have a gdp col that conflicts
     df = df.merge(gdp_stats, left_on="player_id", right_index=True, how="left")
     df = fill_missing(df, ["wgdp", "gdp_opps", "gdp"])
 
@@ -438,7 +435,7 @@ def calculate_batting_war(
 
     team_count = max(len(df["team_name"].unique()), 1)
     df["replacement_level_runs"] = replacement_runs(
-        df["pa"], df["pa"].sum(), team_count, df["gs"].sum(), weights["runs_win"]
+        df["pa"], df["pa"].sum(), team_count, guts_df["total_games"].iloc[0], weights["runs_win"]
     )
 
     for conf in df["conference"].unique():
@@ -449,25 +446,21 @@ def calculate_batting_war(
             + df.loc[mask, "adjustment"].sum()
         )
         lg_pa = df.loc[mask, "pa"].sum()
-        df.loc[mask, "league_adjustment"] = (-lg_total / lg_pa if lg_pa > 0 else 0) * df.loc[
-            mask, "pa"
-        ]
+        df.loc[mask, "league_adjustment"] = (-lg_total / lg_pa if lg_pa > 0 else 0) * df.loc[mask, "pa"]
 
-    df["war"] = batting_war(
-        df["batting"],
-        df["replacement_level_runs"],
-        df["baserunning"],
-        df["adjustment"],
-        df["league_adjustment"],
-        weights["runs_win"],
-    )
+    df["war"] = (
+        df["batting"]
+        + df["replacement_level_runs"]
+        + df["baserunning"]
+        + df["adjustment"]
+        + df["league_adjustment"]
+    ) / weights["runs_win"]
 
     df["year"] = year
     df["division"] = division
-    df = df.fillna(0)
+    df = df.replace({np.inf: np.nan, -np.inf: np.nan})
 
     output_cols = [c for c in batting_columns if c in df.columns and c != "sos_adj_war"]
-
     return df[output_cols].dropna(subset=["war"]), team_clutch
 
 
@@ -476,7 +469,7 @@ def calculate_team_batting(
     guts_df: pd.DataFrame,
     park_factors_df: pd.DataFrame,
     team_clutch: pd.DataFrame,
-    division: int,
+    division: str,
     year: int,
 ) -> pd.DataFrame:
     if player_df.empty:
@@ -493,7 +486,6 @@ def calculate_team_batting(
     team_df = add_batting_stats(team_df)
     team_df = add_linear_weights(team_df, weights)
 
-    team_df["team_id"] = pd.to_numeric(team_df["team_id"], errors="coerce").astype("Int64")
     team_df = team_df.merge(
         team_clutch[["bat_team_id", "rea", "wpa", "wpa_li", "clutch"]],
         left_on="team_id",

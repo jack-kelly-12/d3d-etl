@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from processors.logging_utils import division_year_label, get_logger
+from processors.logging_utils import div_file_prefix, division_year_label, get_logger
 
 logger = get_logger(__name__)
 
@@ -66,7 +66,7 @@ def get_expected_runs_matrix_2(bases_before, outs, runs_rest_of_inn):
 def main(data_dir, year, divisions=None):
     data_dir = Path(data_dir)
     if divisions is None:
-        divisions = [1, 2, 3]
+        divisions = ['ncaa_1', 'ncaa_2', 'ncaa_3']
     all_matrices = {}
     all_prob_matrices = {}
 
@@ -74,8 +74,9 @@ def main(data_dir, year, divisions=None):
     misc_dir.mkdir(exist_ok=True)
 
     for division in divisions:
+        prefix = div_file_prefix(division)
         try:
-            pbp_file = data_dir / "pbp" / f"d{division}_parsed_pbp_{year}.csv"
+            pbp_file = data_dir / "pbp" / f"{prefix}_parsed_pbp_{year}.csv"
 
             if not pbp_file.exists():
                 logger.warning("Play by play file not found: %s", pbp_file)
@@ -89,8 +90,8 @@ def main(data_dir, year, divisions=None):
             runs_rest_of_inn = pbp_df["runs_roi"]
 
             matrix, prob_matrix = get_expected_runs_matrix_2(bases_before, outs, runs_rest_of_inn)
-            all_matrices[f"D{division}_{year}"] = matrix
-            all_prob_matrices[f"D{division}_{year}"] = prob_matrix
+            all_matrices[division] = matrix
+            all_prob_matrices[division] = prob_matrix
             logger.info("Processed %s", division_year_label(division, year))
 
         except Exception as e:
@@ -98,15 +99,13 @@ def main(data_dir, year, divisions=None):
             continue
 
     final_dfs = []
-    for name, matrix in all_matrices.items():
-        division = int(name[1])
-        year_val = int(name.split("_")[1])
-        prob_matrix = all_prob_matrices[name]
+    for division, matrix in all_matrices.items():
+        prob_matrix = all_prob_matrices[division]
 
         df = pd.DataFrame(
             {
                 "division": division,
-                "year": year_val,
+                "year": year,
                 "bases": matrix.index,
                 "erv_0": matrix["0"],
                 "erv_1": matrix["1"],
@@ -126,11 +125,12 @@ def main(data_dir, year, divisions=None):
     final_df = final_df.sort_values(["division", "year", "bases"])
 
     for division in divisions:
-        output_file = misc_dir / f"d{division}_expected_runs_{year}.csv"
+        prefix = div_file_prefix(division)
+        output_file = misc_dir / f"{prefix}_expected_runs_{year}.csv"
         division_df = final_df[final_df["division"] == division]
         if not division_df.empty:
             division_df.to_csv(output_file, index=False)
-            logger.info("Saved expected runs matrix for D%s to %s", division, output_file)
+            logger.info("Saved expected runs matrix for %s to %s", division, output_file)
 
 
 if __name__ == "__main__":
@@ -144,9 +144,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--divisions",
         nargs="+",
-        type=int,
-        default=[1, 2, 3],
-        help="Divisions to process (default: 1 2 3)",
+        type=str,
+        default=['ncaa_1', 'ncaa_2', 'ncaa_3'],
     )
     args = parser.parse_args()
 

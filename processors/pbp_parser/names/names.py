@@ -9,27 +9,28 @@ from .helpers import (
 
 
 def prepare_lineups(
-    batting_lineups: pd.DataFrame, pitching_lineups: pd.DataFrame, roster: pd.DataFrame
+    batting_lineups: pd.DataFrame,
+    pitching_lineups: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    roster_id_map = roster.set_index("ncaa_id")["player_id"].to_dict()
-
     batting = batting_lineups.copy()
-    batting["player_id"] = batting["ncaa_id"].map(roster_id_map)
-    batting["player_name"] = batting["player_name"].apply(format_name)
+    pitching = pitching_lineups.copy()
 
+    if "player_id" not in batting.columns:
+        batting["player_id"] = pd.NA
+    if "player_id" not in pitching.columns:
+        pitching["player_id"] = pd.NA
+
+    batting["player_name"] = batting["player_name"].apply(format_name)
     batting["team_id"] = batting.groupby("contest_id")["team_id"].transform(
         lambda x: x.ffill().bfill()
     )
-    batting["team_id"] = batting["team_id"].astype("Int64")
+    batting["team_id"] = batting["team_id"].astype(str)
 
-    pitching = pitching_lineups.copy()
-    pitching["player_id"] = pitching["ncaa_id"].map(roster_id_map)
     pitching["player_name"] = pitching["player_name"].apply(format_name)
-
     pitching["team_id"] = pitching.groupby("contest_id")["team_id"].transform(
         lambda x: x.ffill().bfill()
     )
-    pitching["team_id"] = pitching["team_id"].astype("Int64")
+    pitching["team_id"] = pitching["team_id"].astype(str)
 
     if "pitch_order" not in pitching.columns:
         pitching["pitch_order"] = pitching.groupby(["contest_id", "team_id"]).cumcount()
@@ -108,13 +109,12 @@ def build_game_lineup_lookup(batting_lineups: pd.DataFrame) -> dict[tuple, dict]
         for _, row in group.iterrows():
             name = row["player_name"]
             player_id = row["player_id"]
-            ncaa_id = row["ncaa_id"]
 
             if pd.isna(name):
                 continue
 
             name_lower = name.strip().lower()
-            lookup[name_lower] = (name, player_id, ncaa_id)
+            lookup[name_lower] = (name, player_id)
 
             from .helpers import generate_name_variations, parse_name_parts
 
@@ -122,7 +122,7 @@ def build_game_lineup_lookup(batting_lineups: pd.DataFrame) -> dict[tuple, dict]
             for var in generate_name_variations(first, last, num):
                 var_key = var.strip().lower()
                 if var_key not in lookup:
-                    lookup[var_key] = (name, player_id, ncaa_id)
+                    lookup[var_key] = (name, player_id)
 
         game_lookups[(contest_id, team_id)] = lookup
 
@@ -145,21 +145,21 @@ def match_player_in_game(
 
     name_lower = original_name.lower()
     if name_lower in game_lookup:
-        canonical, player_id, _ = game_lookup[name_lower]
+        canonical, player_id = game_lookup[name_lower]
         return canonical, player_id
 
     from .helpers import generate_name_variations, normalize_name, parse_name_parts
 
     name_norm = normalize_name(name)
     if name_norm in game_lookup:
-        canonical, player_id, _ = game_lookup[name_norm]
+        canonical, player_id = game_lookup[name_norm]
         return canonical, player_id
 
     first, last, number = parse_name_parts(name)
     for var in generate_name_variations(first, last, number):
         var_key = var.strip().lower()
         if var_key in game_lookup:
-            canonical, player_id, _ = game_lookup[var_key]
+            canonical, player_id = game_lookup[var_key]
             return canonical, player_id
 
     if game_lookup:
@@ -170,7 +170,7 @@ def match_player_in_game(
             name_lower, all_variations, scorer=fuzz.token_sort_ratio, score_cutoff=threshold
         )
         if match:
-            canonical, player_id, _ = game_lookup[match[0]]
+            canonical, player_id = game_lookup[match[0]]
             return canonical, player_id
 
     matched_name, matched_id = match_name(name, team_id, full_lookup, threshold)
@@ -212,15 +212,18 @@ def standardize_names(
     pbp_df: pd.DataFrame,
     batting_lineups: pd.DataFrame,
     pitching_lineups: pd.DataFrame,
-    roster: pd.DataFrame,
     threshold: int = 70,
+    cube_fallback_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    batting, pitching = prepare_lineups(batting_lineups, pitching_lineups, roster)
+    batting, pitching = prepare_lineups(batting_lineups, pitching_lineups)
 
-    roster = roster.copy()
-    roster["player_name"] = roster["player_name"].apply(format_name)
-    roster["team_id"] = roster["team_id"].astype("Int64")
-    full_lookup = build_name_lookup(roster, team_col="team_id")
+    full_lookup = build_name_lookup(batting, team_col="team_id", id_col="player_id")
+
+    if cube_fallback_df is not None and not cube_fallback_df.empty:
+        cube_lookup = build_name_lookup(cube_fallback_df, team_col="team_id", id_col="player_id")
+        for team_id, names in cube_lookup.items():
+            if team_id not in full_lookup:
+                full_lookup[team_id] = names
 
     game_lookups = build_game_lineup_lookup(batting)
 

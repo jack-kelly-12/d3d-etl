@@ -3,20 +3,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from processors.logging_utils import division_year_label, get_logger
+from processors.logging_utils import div_file_prefix, division_year_label, get_logger
 from processors.pbp_parser.constants import EventType
 
 logger = get_logger(__name__)
 
 
-def load_data(data_dir: Path, division: int, year: int) -> dict:
-    """Load all required data files."""
+def load_data(data_dir: Path, division: str, year: int) -> dict:
+    prefix = div_file_prefix(division)
     paths = {
-        "pbp": data_dir / "pbp" / f"d{division}_parsed_pbp_{year}.csv",
+        "pbp": data_dir / "pbp" / f"{prefix}_parsed_pbp_{year}.csv",
         "leverage": data_dir / "miscellaneous" / "leverage_index.csv",
         "win_exp": data_dir / "miscellaneous" / "win_expectancy.csv",
-        "run_exp": data_dir / "miscellaneous" / f"d{division}_expected_runs_{year}.csv",
-        "linear_weights": data_dir / "miscellaneous" / f"d{division}_linear_weights_{year}.csv",
+        "run_exp": data_dir / "miscellaneous" / f"{prefix}_expected_runs_{year}.csv",
+        "linear_weights": data_dir / "miscellaneous" / f"{prefix}_linear_weights_{year}.csv",
     }
 
     missing = [name for name, path in paths.items() if not path.exists()]
@@ -49,7 +49,7 @@ def add_woba(df: pd.DataFrame, lw: pd.DataFrame) -> pd.DataFrame:
 
     df["woba"] = 0.0
     for event_type, weight_key in WOBA_EVENTS.items():
-        mask = df["event_type"] == event_type.value
+        mask = df["event_type"].eq(event_type.value)
         df.loc[mask, "woba"] = weights.get(weight_key)
 
     return df
@@ -203,7 +203,7 @@ def add_flags(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def process_division(data_dir: Path, division: int, year: int) -> pd.DataFrame:
+def process_division(data_dir: Path, division: str, year: int) -> pd.DataFrame:
     """Process a single division's play-by-play data."""
     logger.info("Processing %s...", division_year_label(division, year))
 
@@ -243,7 +243,8 @@ def process_division(data_dir: Path, division: int, year: int) -> pd.DataFrame:
 
     df = df.sort_values(["contest_id", "play_id"])
 
-    output_path = data_dir / "pbp" / f"d{division}_pbp_with_metrics_{year}.csv"
+    prefix = div_file_prefix(division)
+    output_path = data_dir / "pbp" / f"{prefix}_pbp_with_metrics_{year}.csv"
     df.to_csv(output_path, index=False)
     logger.info("Saved to %s", output_path)
 
@@ -335,7 +336,7 @@ def keep_columns(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
-def main(data_dir: str, year: int, divisions: list[int]):
+def main(data_dir: str, year: int, divisions: list[str]):
     """Process play-by-play data for specified divisions."""
     data_dir = Path(data_dir)
 
@@ -355,7 +356,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Add advanced metrics to PBP data")
     parser.add_argument("--data_dir", required=True, help="Root data directory")
     parser.add_argument("--year", type=int, required=True)
-    parser.add_argument("--divisions", nargs="+", type=int, default=[1, 2, 3])
+    parser.add_argument("--divisions", nargs="+", type=str, default=['ncaa_1', 'ncaa_2', 'ncaa_3'])
     args = parser.parse_args()
 
     main(args.data_dir, args.year, args.divisions)

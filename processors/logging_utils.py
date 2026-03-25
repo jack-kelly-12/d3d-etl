@@ -10,5 +10,9 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-def division_year_label(division: int, year: int) -> str:
-    return f"D{division} {year}"
+def div_file_prefix(division: str) -> str:
+    return division
+
+
+def division_year_label(division: str | int, year: int) -> str:
+    return f"{division} {year}"

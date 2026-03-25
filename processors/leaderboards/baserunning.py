@@ -55,7 +55,7 @@ def _out_at_flags(desc: pd.Series) -> pd.Series:
 
 
 def calculate_player_steal_stats(df: pd.DataFrame) -> pd.DataFrame:
-    et = pd.to_numeric(df["event_type"], errors="coerce")
+    et = df["event_type"]
     is_sb = et.eq(EventType.STOLEN_BASE.value)
     is_cs = et.eq(EventType.CAUGHT_STEALING.value)
     is_att = is_sb | is_cs
@@ -135,7 +135,7 @@ def calculate_player_steal_stats(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def calculate_team_steal_stats(df: pd.DataFrame) -> pd.DataFrame:
-    et = pd.to_numeric(df["event_type"], errors="coerce")
+    et = df["event_type"]
     is_sb = et.eq(EventType.STOLEN_BASE.value)
     is_cs = et.eq(EventType.CAUGHT_STEALING.value)
     is_att = is_sb | is_cs
@@ -220,7 +220,7 @@ def calculate_wgdp(df: pd.DataFrame, group_col: str, id_col: str) -> pd.DataFram
 
 def calculate_webt(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
     df = add_runner_dests(df)
-    et = pd.to_numeric(df["event_type"], errors="coerce")
+    et = df["event_type"]
     is_single = et.eq(EventType.SINGLE.value)
     is_double = et.eq(EventType.DOUBLE.value)
 

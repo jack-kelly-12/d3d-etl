@@ -1,4 +1,4 @@
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 
 
 class BattedBallType(StrEnum):
@@ -9,33 +9,33 @@ class BattedBallType(StrEnum):
     BUNT = "BU"
 
 
-class EventType(IntEnum):
-    UNKNOWN = 0
-    NO_PLAY = 1
-    GENERIC_OUT = 2
-    STRIKEOUT = 3
-    STOLEN_BASE = 4
-    DEFENSIVE_INDIFF = 5
-    CAUGHT_STEALING = 6
-    PICKOFF_ERROR = 7
-    PICKOFF = 8
-    WILD_PITCH = 9
-    PASSED_BALL = 10
-    BALK = 11
-    OTHER_ADVANCE = 12
-    FOUL_ERROR = 13
-    WALK = 14
-    INTENTIONAL_WALK = 15
-    HIT_BY_PITCH = 16
-    INTERFERENCE = 17
-    ERROR = 18
-    FIELDERS_CHOICE = 19
-    SINGLE = 20
-    DOUBLE = 21
-    TRIPLE = 22
-    HOME_RUN = 23
-    STRIKEOUT_PASSED_BALL = 24
-    STRIKEOUT_WILD_PITCH = 25
+class EventType(StrEnum):
+    UNKNOWN = "UNK"
+    NO_PLAY = "NP"
+    GENERIC_OUT = "OUT"
+    STRIKEOUT = "SO"
+    STOLEN_BASE = "SB"
+    DEFENSIVE_INDIFF = "DEF_IND"
+    CAUGHT_STEALING = "CS"
+    PICKOFF_ERROR = "POE"
+    PICKOFF = "PO"
+    WILD_PITCH = "WP"
+    PASSED_BALL = "PB"
+    BALK = "BK"
+    OTHER_ADVANCE = "ADV"
+    FOUL_ERROR = "FE"
+    WALK = "BB"
+    INTENTIONAL_WALK = "IBB"
+    HIT_BY_PITCH = "HBP"
+    INTERFERENCE = "CI"
+    ERROR = "E"
+    FIELDERS_CHOICE = "FC"
+    SINGLE = "1B"
+    DOUBLE = "2B"
+    TRIPLE = "3B"
+    HOME_RUN = "HR"
+    STRIKEOUT_PASSED_BALL = "SO_PB"
+    STRIKEOUT_WILD_PITCH = "SO_WP"
 
 
 POS_MAP = {

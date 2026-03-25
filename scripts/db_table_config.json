@@ -1,0 +1,47 @@
+[
+  { "pattern": "leaderboards/baserunning.csv",              "table": "baserunning" },
+  { "pattern": "leaderboards/baserunning_team.csv",         "table": "baserunning_team" },
+  { "pattern": "leaderboards/batted_ball_batter.csv",       "table": "batted_ball_batter" },
+  { "pattern": "leaderboards/batted_ball_batting_team.csv", "table": "batted_ball_batting_team" },
+  { "pattern": "leaderboards/batted_ball_pitcher.csv",      "table": "batted_ball_pitcher" },
+  { "pattern": "leaderboards/batted_ball_pitching_team.csv","table": "batted_ball_pitching_team" },
+  { "pattern": "leaderboards/rolling_batter.csv",           "table": "rolling_batter" },
+  { "pattern": "leaderboards/rolling_pitcher.csv",          "table": "rolling_pitcher" },
+  { "pattern": "leaderboards/situational_batter.csv",       "table": "situational_batter" },
+  { "pattern": "leaderboards/situational_batting_team.csv", "table": "situational_batting_team" },
+  { "pattern": "leaderboards/situational_pitcher.csv",      "table": "situational_pitcher" },
+  { "pattern": "leaderboards/situational_pitching_team.csv","table": "situational_pitching_team" },
+  { "pattern": "leaderboards/splits_batter.csv",            "table": "splits_batter" },
+  { "pattern": "leaderboards/splits_batting_team.csv",      "table": "splits_batting_team" },
+  { "pattern": "leaderboards/splits_pitcher.csv",           "table": "splits_pitcher" },
+  { "pattern": "leaderboards/splits_pitching_team.csv",     "table": "splits_pitching_team" },
+  { "pattern": "leaderboards/value_batter.csv",             "table": "value_batter" },
+  { "pattern": "leaderboards/value_batting_team.csv",       "table": "value_batting_team" },
+  { "pattern": "leaderboards/value_pitcher.csv",            "table": "value_pitcher" },
+  { "pattern": "leaderboards/value_pitching_team.csv",      "table": "value_pitching_team" },
+
+  { "pattern": "war/*_batting_team_war_*.csv",  "table": "batting_team" },
+  { "pattern": "war/*_pitching_team_war_*.csv", "table": "pitching_team" },
+  { "pattern": "war/*_batting_war_*.csv",        "table": "batting" },
+  { "pattern": "war/*_pitching_war_*.csv",       "table": "pitching" },
+
+  { "pattern": "cube_stats/cube_player_info.csv",  "table": "player_information" },
+
+  { "pattern": "miscellaneous/*_expected_runs_*.csv",     "table": "expected_runs" },
+  { "pattern": "miscellaneous/*_linear_weights_*.csv",    "table": "linear_weights" },
+
+  { "pattern": "pbp/*_pbp_with_metrics_*.csv",              "table": "pbp" },
+
+  { "pattern": "schedules/*_schedules_*.csv",  "table": "schedules" },
+  { "pattern": "rankings/*_rankings_*.csv",    "table": "rankings" },
+
+  { "pattern": "lineups/*_batting_lineups_*.csv",  "table": "batting_lineups" },
+  { "pattern": "lineups/*_pitching_lineups_*.csv", "table": "pitching_lineups" },
+
+  { "pattern": "park_factors/pf.csv", "table": "park_factors" },
+
+  { "pattern": "guts/guts_constants.csv",    "table": "guts_constants" },
+
+  { "pattern": "ncaa_team_history.csv",         "table": "team_history" },
+  { "pattern": "team_mappings.csv",             "table": "team_information" }
+]
