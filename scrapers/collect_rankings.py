@@ -186,7 +186,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--years", nargs="+", required=True)
-    parser.add_argument("--divisions", nargs="+", type=int, required=True)
+    parser.add_argument("--divisions", nargs="+", type=str, required=True)
     parser.add_argument("--page_wait_s", type=float, default=5.0)
     parser.add_argument("--between_downloads_s", type=float, default=30.0)
     parser.add_argument("--between_divisions_s", type=float, default=240.0)

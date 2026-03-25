@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+import cloudscraper
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 
 from scrapers.constants import (
@@ -133,7 +133,7 @@ def _parse_table(
 
 
 def _scrape_school_year(
-    session: requests.Session,
+    session,
     url: str,
     school_meta: dict[str, Any],
     timeout: int = 20,
@@ -249,7 +249,7 @@ def scrape_cube_stats(
     remaining = colleges[~colleges["college_name"].isin(done_colleges)] if run_remaining else colleges
     print(f"\n=== {division} cube stats {years} — {len(remaining)}/{total} schools ===")
 
-    session = requests.Session()
+    session = cloudscraper.create_scraper()
     session.headers.update(HEADERS)
 
     try:
