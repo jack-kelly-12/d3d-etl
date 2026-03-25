@@ -64,45 +64,16 @@ def _load_contest_ids(schedules_dir: Path, div: str, year: int) -> tuple[set[int
         return set(), {}
 
 
-def _no_data_path(pbp_outdir: Path, div: str, year: int) -> Path:
-    return pbp_outdir / "_tmp" / f"{div}_pbp_no_data_{year}.csv"
-
-def _load_done_ids(pbp_outdir: Path, lineups_outdir: Path, div: str, year: int) -> set[int]:
+def _load_done_ids(lineups_outdir: Path, div: str, year: int) -> set[int]:
     done: set[int] = set()
-    for fpath in [
-        pbp_outdir / f"{div}_pbp_{year}.csv",
-        lineups_outdir / f"{div}_batting_lineups_{year}.csv",
-    ]:
-        if not fpath.exists():
-            continue
+    fpath = lineups_outdir / f"{div}_batting_lineups_{year}.csv"
+    if fpath.exists():
         try:
             df = pd.read_csv(fpath, usecols=["contest_id"])
             done.update(pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int))
         except Exception:
             pass
-    no_data = _no_data_path(pbp_outdir, div, year)
-    if no_data.exists():
-        try:
-            df = pd.read_csv(no_data)
-            done.update(pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int))
-        except Exception:
-            pass
     return done
-
-
-def _flush_no_data(pbp_outdir: Path, div: str, year: int, new_ids: set[int]) -> None:
-    if not new_ids:
-        return
-    p = _no_data_path(pbp_outdir, div, year)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    existing: set[int] = set()
-    if p.exists():
-        try:
-            df = pd.read_csv(p)
-            existing.update(pd.to_numeric(df["contest_id"], errors="coerce").dropna().astype(int))
-        except Exception:
-            pass
-    pd.DataFrame({"contest_id": sorted(existing | new_ids)}).to_csv(p, index=False)
 
 
 def _append_rows(path: Path, rows: list[dict], cols: list[str]) -> None:
@@ -223,7 +194,7 @@ def scrape_games(year, divisions, schedules_dir, pbp_outdir, lineups_outdir, bas
                 logger.info(f"{div} {year}: no schedule data, skipping")
                 continue
 
-            done_ids = _load_done_ids(pbp_path, lin_path, div, year)
+            done_ids = _load_done_ids(lin_path, div, year)
             to_do = sorted(contest_ids - done_ids)
 
             if not to_do:
@@ -236,15 +207,12 @@ def scrape_games(year, divisions, schedules_dir, pbp_outdir, lineups_outdir, bas
             out_batters  = lin_path / f"{div}_batting_lineups_{year}.csv"
             out_pitchers = lin_path / f"{div}_pitching_lineups_{year}.csv"
 
-            no_data: set[int] = set()
-
             for i, cid in enumerate(to_do):
                 pbp_rows = _fetch_pbp(cid, div, year, date_map.get(cid, ""), http)
                 time.sleep(base_delay)
                 batter_rows, pitcher_rows = _fetch_boxscore(cid, div, year, http)
 
                 if not pbp_rows and not batter_rows and not pitcher_rows:
-                    no_data.add(cid)
                     logger.info(f"{cid} — no data")
                 else:
                     _append_rows(out_pbp, pbp_rows, PBP_COLS)
@@ -256,14 +224,10 @@ def scrape_games(year, divisions, schedules_dir, pbp_outdir, lineups_outdir, bas
                     )
 
                 if (i + 1) % 100 == 0:
-                    _flush_no_data(pbp_path, div, year, no_data)
-                    no_data = set()
                     logger.info(f"checkpoint: {i + 1}/{len(to_do)} games processed")
 
                 if i + 1 < len(to_do):
                     time.sleep(base_delay)
-
-            _flush_no_data(pbp_path, div, year, no_data)
             logger.info(f"{div} {year}: done")
 
 
