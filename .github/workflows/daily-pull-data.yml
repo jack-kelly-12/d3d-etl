@@ -353,16 +353,6 @@ jobs:
             --region "$AWS_REGION" \
             --years "${YEARS_ARR[@]}"
 
-      - name: Scrape cube team history
-        env:
-          DATA_ROOT: ${{ vars.DATA_ROOT }}
-          YEARS: ${{ vars.YEARS }}
-        run: |
-          set -euo pipefail
-          IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
-          python -u -m scrapers.collect_cube_team_history \
-            --out_file "$DATA_ROOT/cube_team_history.csv" \
-            --years "${YEARS_ARR[@]}"
 
       - name: Scrape cube stats (ncaa_1, ncaa_2, ncaa_3)
         env:

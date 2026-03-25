@@ -60,13 +60,7 @@ def _build_cube_commands(cfg: PipelineConfig) -> list[list[str]]:
     cube_stats_dir = cfg.data_root / "cube_stats"
     team_history_file = cfg.data_root / "cube_team_history.csv"
 
-    cmds: list[list[str]] = [
-        [
-            sys.executable, "-m", "scrapers.collect_cube_team_history",
-            "--out_file", str(team_history_file),
-            "--years", *years_args,
-        ],
-    ]
+    cmds: list[list[str]] = []
     for div in ncaa_divs:
         cmds.append([
             sys.executable, "-m", "scrapers.collect_cube_stats",
