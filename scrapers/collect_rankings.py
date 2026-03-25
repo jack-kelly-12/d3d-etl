@@ -11,8 +11,9 @@ from .scraper_utils import HardBlockError, ScraperConfig, ScraperSession
 BASE = "https://masseyratings.com"
 
 
-def build_url(year: int, division: int) -> str:
-    return f"{BASE}/cbase{year}/ncaa-d{division}/ratings"
+def build_url(year: int, division: str) -> str:
+    div_num = division.split("_")[-1]
+    return f"{BASE}/cbase{year}/ncaa-d{div_num}/ratings"
 
 
 def _sleep_jitter(seconds: float, jitter_frac: float = 0.25) -> None:
@@ -24,7 +25,7 @@ def _sleep_jitter(seconds: float, jitter_frac: float = 0.25) -> None:
 
 def scrape_massey_rankings(
     years: list[int],
-    divisions: list[int],
+    divisions: list[str],
     outdir: str | None = None,
     page_wait_s: float = 2.0,
     between_downloads_s: float = 4.0,
@@ -130,7 +131,7 @@ def _parse_years(vals: list[str]) -> list[int]:
     return out
 
 
-def normalize_massey_rankings(df: pd.DataFrame, division: int, year: int) -> pd.DataFrame:
+def normalize_massey_rankings(df: pd.DataFrame, division: str, year: int) -> pd.DataFrame:
     df = df.copy()
 
     cols = list(df.columns)

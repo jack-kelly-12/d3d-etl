@@ -100,14 +100,13 @@ def _build_resolve_commands(cfg: PipelineConfig) -> list[list[str]]:
 
 def _build_rankings_command(cfg: PipelineConfig) -> list[str]:
     years_args = [str(y) for y in cfg.years]
-    int_divs = [str(d) for d in cfg.divisions]
     return [
         sys.executable,
         "-m",
         "scrapers.collect_rankings",
         "--outdir", str(cfg.rankings_data_dir),
         "--years", *years_args,
-        "--divisions", *int_divs,
+        "--divisions", *_ncaa_divs(cfg),
         "--base_delay", str(cfg.base_delay),
     ]
 
