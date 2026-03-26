@@ -204,7 +204,6 @@ def scrape_cube_stats(
     division: str,
     outdir: str,
     years: list[int] | None = None,
-    run_remaining: bool = False,
     batch_size: int = 50,
     team_mappings_file: str = "/Users/jackkelly/Desktop/d3d-etl/data/team_mappings.csv",
     ncaa_history_file: str = "/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv",
@@ -229,35 +228,21 @@ def scrape_cube_stats(
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
 
-    # Collect all rows in memory per year, write fresh at the end
     all_bat: dict[int, list[pd.DataFrame]] = {y: [] for y in years}
     all_pit: dict[int, list[pd.DataFrame]] = {y: [] for y in years}
 
-    done_colleges: set[str] = set()
-    if run_remaining:
-        for year in years:
-            for stat_type in ("batting", "pitching"):
-                path = outdir_path / f"{division}_{stat_type}_{year}.csv"
-                if path.exists():
-                    try:
-                        df = pd.read_csv(path, usecols=["college"])
-                        done_colleges.update(df["college"].dropna().unique())
-                    except Exception:
-                        pass
-
     total = len(colleges)
-    remaining = colleges[~colleges["college_name"].isin(done_colleges)] if run_remaining else colleges
-    print(f"\n=== {division} cube stats {years} — {len(remaining)}/{total} schools ===")
+    print(f"\n=== {division} cube stats {years} — {total} schools ===")
 
     session = cloudscraper.create_scraper()
     session.headers.update(HEADERS)
 
     try:
-        for idx, row in enumerate(remaining.itertuples(index=False)):
+        for idx, row in enumerate(colleges.itertuples(index=False)):
             college_name = row.college_name
             college_id = row.college_id
 
-            print(f"\n[{idx + 1}/{len(remaining)}] {college_name}")
+            print(f"\n[{idx + 1}/{total}] {college_name}")
 
             for year in years:
                 url = _stats_url(college_id, year)
@@ -295,7 +280,7 @@ def scrape_cube_stats(
 
                 time.sleep(1.0)
 
-            if (idx + 1) % batch_size == 0 and idx + 1 < len(remaining):
+            if (idx + 1) % batch_size == 0 and idx + 1 < total:
                 cooldown = random.uniform(15.0, 20.0)
                 print(f"\n[cooldown] sleeping {cooldown:.1f}s after {idx + 1} schools")
                 time.sleep(cooldown)
@@ -325,7 +310,6 @@ if __name__ == "__main__":
     parser.add_argument("--division", required=True)
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/cube_stats")
     parser.add_argument("--year", "--years", dest="years", nargs="+", type=int, default=YEARS)
-    parser.add_argument("--run_remaining", action="store_true")
     parser.add_argument("--batch_size", type=int, default=50)
     parser.add_argument("--team_mappings_file", default="/Users/jackkelly/Desktop/d3d-etl/data/team_mappings.csv")
     parser.add_argument("--ncaa_history_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")
