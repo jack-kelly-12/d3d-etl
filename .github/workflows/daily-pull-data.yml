@@ -366,7 +366,6 @@ jobs:
               --division "$DIV" \
               --outdir "$DATA_ROOT/cube_stats" \
               --years "${YEARS_ARR[@]}" \
-              --run_remaining
           done
 
       - name: Record existing player info count
