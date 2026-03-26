@@ -104,16 +104,27 @@ jobs:
 
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
-          NCAA_DIVS=("${DIVS_ARR[@]}")
 
           for YEAR in "${YEARS_ARR[@]}"; do
             xvfb-run -a python -u -m scrapers.collect_schedules \
               --year "$YEAR" \
-              --divisions "${NCAA_DIVS[@]}" \
+              --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
               --outdir "$SCHEDULES_OUTDIR" \
               --base_delay "$BASE_DELAY"
           done
+
+      - name: Run non-NCAA schedules scraper (NAIA, NJCAA)
+        env:
+          BASE_DELAY: ${{ vars.BASE_DELAY }}
+          SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
+        run: |
+          set -euo pipefail
+          python -u -m scrapers.collect_non_ncaa_schedules \
+            --year 2026 \
+            --divisions naia njcaa_1 njcaa_2 njcaa_3 \
+            --outdir "$SCHEDULES_OUTDIR" \
+            --base_delay "$BASE_DELAY"
 
       - name: Upload schedules artifact for game job
         if: always()
@@ -235,17 +246,31 @@ jobs:
 
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
-          NCAA_DIVS=("${DIVS_ARR[@]}")
 
           for YEAR in "${YEARS_ARR[@]}"; do
             python -u -m scrapers.collect_game \
               --year "$YEAR" \
-              --divisions "${NCAA_DIVS[@]}" \
+              --divisions "${DIVS_ARR[@]}" \
               --indir "$SCHEDULES_OUTDIR" \
               --pbp_outdir "$PBP_OUTDIR" \
-              --lineups_outdir "$LINEUPS_OUTDIR" \
-              --base_delay "$BASE_DELAY"
+              --lineups_outdir "$LINEUPS_OUTDIR"
           done
+
+      - name: Run non-NCAA game scraper (NAIA, NJCAA)
+        env:
+          BASE_DELAY: ${{ vars.BASE_DELAY }}
+          SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
+          PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
+          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
+        run: |
+          set -euo pipefail
+          python -u -m scrapers.collect_non_ncaa_game \
+            --year 2026 \
+            --divisions naia njcaa_1 njcaa_2 njcaa_3 \
+            --indir "$SCHEDULES_OUTDIR" \
+            --pbp_outdir "$PBP_OUTDIR" \
+            --lineups_outdir "$LINEUPS_OUTDIR" \
+            --base_delay "$BASE_DELAY"
 
       - name: Always upload pbp outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
@@ -384,14 +409,13 @@ jobs:
           set -euo pipefail
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
-          NCAA_DIVS=("${DIVS_ARR[@]}")
           python -u -m scrapers.collect_cube_player_info \
             --data_dir "$DATA_ROOT" \
             --out_file "$DATA_ROOT/cube_stats/cube_player_info.csv" \
             --run_remaining \
             --workers 8 \
             --years "${YEARS_ARR[@]}" \
-            --divisions "${NCAA_DIVS[@]}"
+            --divisions "${DIVS_ARR[@]}"
 
       - name: Reconcile players if new IDs were scraped
         env:
@@ -493,11 +517,10 @@ jobs:
           set -euo pipefail
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
-          NCAA_DIVS=("${DIVS_ARR[@]}")
           python -u -m processors.map_ncaa_to_cube \
             --data_dir "$DATA_ROOT" \
             --years "${YEARS_ARR[@]}" \
-            --divisions "${NCAA_DIVS[@]}"
+            --divisions "${DIVS_ARR[@]}"
 
       - name: Upload resolved lineups to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'

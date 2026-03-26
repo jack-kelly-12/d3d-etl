@@ -87,13 +87,10 @@ jobs:
           IFS=',' read -r -a YEARS_ARR <<< "$YEARS"
           IFS=',' read -r -a DIVS_ARR <<< "$DIVISIONS"
 
-          NCAA_DIVS=()
-          for d in "${DIVS_ARR[@]}"; do NCAA_DIVS+=("ncaa_$d"); done
-
           python -u -m processors.run_all \
             --data_dir "$DATA_ROOT" \
             --years "${YEARS_ARR[@]}" \
-            --divisions "${NCAA_DIVS[@]}"
+            --divisions "${DIVS_ARR[@]}"
 
       - name: Always upload processors outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
