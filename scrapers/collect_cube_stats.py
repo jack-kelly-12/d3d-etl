@@ -240,8 +240,8 @@ def scrape_cube_stats(
                 path = outdir_path / f"{division}_{stat_type}_{year}.csv"
                 if path.exists():
                     try:
-                        df = pd.read_csv(path, usecols=["team_name"])
-                        done_colleges.update(df["team_name"].dropna().unique())
+                        df = pd.read_csv(path, usecols=["college"])
+                        done_colleges.update(df["college"].dropna().unique())
                     except Exception:
                         pass
 
