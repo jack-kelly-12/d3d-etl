@@ -365,7 +365,7 @@ jobs:
               --ncaa_history_file "$DATA_ROOT/ncaa_team_history.csv" \
               --division "$DIV" \
               --outdir "$DATA_ROOT/cube_stats" \
-              --years "${YEARS_ARR[@]}" \
+              --years "${YEARS_ARR[@]}"
           done
 
       - name: Record existing player info count

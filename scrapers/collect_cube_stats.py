@@ -320,7 +320,6 @@ if __name__ == "__main__":
         division=args.division,
         outdir=args.outdir,
         years=args.years,
-        run_remaining=args.run_remaining,
         batch_size=args.batch_size,
         team_mappings_file=args.team_mappings_file,
         ncaa_history_file=args.ncaa_history_file,
