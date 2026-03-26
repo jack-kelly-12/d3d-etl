@@ -42,7 +42,7 @@ def scrape_massey_rankings(
     outdir.mkdir(parents=True, exist_ok=True)
 
     years = sorted({int(y) for y in years})
-    divisions = sorted({int(d) for d in divisions})
+    divisions = sorted(set(str(d) for d in divisions))
 
     base_config = ScraperConfig(
         base_delay=base_delay,
