@@ -5,8 +5,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import cloudscraper
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 
 from scripts.hash_player_ids import SALT, hash_player_id
@@ -167,7 +167,7 @@ def _parse_player_page(soup: BeautifulSoup, player_id: int) -> dict:
     return row
 
 
-def _fetch_player(session: requests.Session, player_id: int) -> dict | None:
+def _fetch_player(session, player_id: int) -> dict | None:
     url = f"{BASE_URL}/content/player/{player_id}/"
     try:
         resp = session.get(url, timeout=20)
@@ -226,12 +226,9 @@ def scrape_cube_player_info(
     total = len(ids)
     print(f"[info] scraping {total} players with {workers} threads")
 
-    def _new_session() -> requests.Session:
-        s = requests.Session()
+    def _new_session():
+        s = cloudscraper.create_scraper()
         s.headers.update(HEADERS)
-        adapter = requests.adapters.HTTPAdapter(pool_connections=workers, pool_maxsize=workers)
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
         return s
 
     state = {

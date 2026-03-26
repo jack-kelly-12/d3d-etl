@@ -1,4 +1,4 @@
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
@@ -28,7 +28,9 @@ def abs_url(page_url, href):
 
 def scrape_division(division: int, url: str) -> pd.DataFrame:
     print(f"\n--- Scraping Division {division}: {url} ---")
-    resp = requests.get(url, headers=HEADERS, timeout=20)
+    scraper = cloudscraper.create_scraper()
+    scraper.headers.update(HEADERS)
+    resp = scraper.get(url, timeout=20)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     table = soup.find("table", {"id": "grid1"})

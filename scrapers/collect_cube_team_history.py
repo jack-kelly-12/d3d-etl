@@ -2,8 +2,8 @@ import argparse
 import re
 import time
 
+import cloudscraper
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.thebaseballcube.com/content/college_seasons"
@@ -24,7 +24,7 @@ def _normalize_division(raw: str) -> str:
     return re.sub(r"[^0-9a-zA-Z]+", "_", raw).strip("_").lower()
 
 
-def _scrape_season(session: requests.Session, year: int) -> list[dict]:
+def _scrape_season(session, year: int) -> list[dict]:
     url = f"{BASE_URL}/{year}/"
     print(f"[{year}] fetching {url}")
     resp = session.get(url, timeout=30)
@@ -88,7 +88,7 @@ def scrape_cube_team_history(
     if years is None:
         years = list(YEARS)
 
-    session = requests.Session()
+    session = cloudscraper.create_scraper()
     session.headers.update(HEADERS)
 
     all_rows: list[dict] = []
