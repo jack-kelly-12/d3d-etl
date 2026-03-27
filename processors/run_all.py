@@ -59,97 +59,97 @@ def main():
     data_dir = args.data_dir
 
     for year in args.years:
-        # if _new_cube_ids(data_dir, args.divisions, year):
-        #     logger.info("New cube player IDs found for %d — scraping player info", year)
-        #     run(
-        #         [
-        #             sys.executable, "-m", "scrapers.collect_cube_player_info",
-        #             "--data_dir", data_dir,
-        #             "--out_file", str(Path(data_dir) / "cube_stats" / "cube_player_info.csv"),
-        #             "--run_remaining",
-        #             "--years", str(year),
-        #             "--divisions",
-        #         ]
-        #         + [str(d) for d in args.divisions]
-        #     )
-        #     run(
-        #         [
-        #             sys.executable, "-m", "processors.reconcile_players",
-        #             "--data_dir", data_dir,
-        #         ]
-        #     )
-        # else:
-        #     logger.info("No new cube player IDs for %d", year)
+        if _new_cube_ids(data_dir, args.divisions, year):
+            logger.info("New cube player IDs found for %d — scraping player info", year)
+            run(
+                [
+                    sys.executable, "-m", "scrapers.collect_cube_player_info",
+                    "--data_dir", data_dir,
+                    "--out_file", str(Path(data_dir) / "cube_stats" / "cube_player_info.csv"),
+                    "--run_remaining",
+                    "--years", str(year),
+                    "--divisions",
+                ]
+                + [str(d) for d in args.divisions]
+            )
+            run(
+                [
+                    sys.executable, "-m", "processors.reconcile_players",
+                    "--data_dir", data_dir,
+                ]
+            )
+        else:
+            logger.info("No new cube player IDs for %d", year)
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.map_ncaa_to_cube",
-        #         "--data_dir", data_dir,
-        #         "--years", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.map_ncaa_to_cube",
+                "--data_dir", data_dir,
+                "--years", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.pbp_parser.main",
-        #         "--data_dir", data_dir,
-        #         "--year", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.pbp_parser.main",
+                "--data_dir", data_dir,
+                "--year", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.add_pbp_metrics",
-        #         "--data_dir", data_dir,
-        #         "--year", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.add_pbp_metrics",
+                "--data_dir", data_dir,
+                "--year", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.get_linear_weights",
-        #         "--data_dir", data_dir,
-        #         "--year", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.get_linear_weights",
+                "--data_dir", data_dir,
+                "--year", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.get_guts",
-        #         "--data_dir", data_dir,
-        #         "--year", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.get_guts",
+                "--data_dir", data_dir,
+                "--year", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.get_er_matrix",
-        #         "--data_dir", data_dir,
-        #         "--year", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.get_er_matrix",
+                "--data_dir", data_dir,
+                "--year", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
-        # run(
-        #     [
-        #         sys.executable, "-m", "processors.get_war",
-        #         "--data_dir", data_dir,
-        #         "--year", str(year),
-        #         "--divisions",
-        #     ]
-        #     + [str(d) for d in args.divisions]
-        # )
+        run(
+            [
+                sys.executable, "-m", "processors.get_war",
+                "--data_dir", data_dir,
+                "--year", str(year),
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
         run(
             [
