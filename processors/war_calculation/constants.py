@@ -145,8 +145,6 @@ pitching_columns = [
     "clutch",
     "war",
     "sos_adj_war",
-    "fo",
-    "go",
 ]
 
 BATTING_SUM_COLS = [
