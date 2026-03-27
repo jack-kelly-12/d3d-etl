@@ -83,7 +83,6 @@ jobs:
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
-          BASE_DELAY: ${{ vars.BASE_DELAY }}
           TEAM_IDS_FILE: ${{ vars.TEAM_IDS_FILE }}
           SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
         run: |
@@ -110,21 +109,18 @@ jobs:
               --year "$YEAR" \
               --divisions "${DIVS_ARR[@]}" \
               --team_ids_file "$TEAM_IDS_FILE" \
-              --outdir "$SCHEDULES_OUTDIR" \
-              --base_delay "$BASE_DELAY"
+              --outdir "$SCHEDULES_OUTDIR"
           done
 
       - name: Run non-NCAA schedules scraper (NAIA, NJCAA)
         env:
-          BASE_DELAY: ${{ vars.BASE_DELAY }}
           SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
         run: |
           set -euo pipefail
           python -u -m scrapers.collect_non_ncaa_schedules \
             --year 2026 \
             --divisions naia njcaa_1 njcaa_2 njcaa_3 \
-            --outdir "$SCHEDULES_OUTDIR" \
-            --base_delay "$BASE_DELAY"
+            --outdir "$SCHEDULES_OUTDIR"
 
       - name: Upload schedules artifact for game job
         if: always()
@@ -228,7 +224,6 @@ jobs:
         env:
           YEARS: ${{ vars.YEARS }}
           DIVISIONS: ${{ vars.DIVISIONS }}
-          BASE_DELAY: ${{ vars.BASE_DELAY }}
           SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
           PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
           LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
@@ -255,22 +250,6 @@ jobs:
               --pbp_outdir "$PBP_OUTDIR" \
               --lineups_outdir "$LINEUPS_OUTDIR"
           done
-
-      - name: Run non-NCAA game scraper (NAIA, NJCAA)
-        env:
-          BASE_DELAY: ${{ vars.BASE_DELAY }}
-          SCHEDULES_OUTDIR: ${{ vars.SCHEDULES_OUTDIR }}
-          PBP_OUTDIR: ${{ vars.PBP_OUTDIR }}
-          LINEUPS_OUTDIR: ${{ vars.LINEUPS_OUTDIR }}
-        run: |
-          set -euo pipefail
-          python -u -m scrapers.collect_non_ncaa_game \
-            --year 2026 \
-            --divisions naia njcaa_1 njcaa_2 njcaa_3 \
-            --indir "$SCHEDULES_OUTDIR" \
-            --pbp_outdir "$PBP_OUTDIR" \
-            --lineups_outdir "$LINEUPS_OUTDIR" \
-            --base_delay "$BASE_DELAY"
 
       - name: Always upload pbp outputs to S3
         if: always() && vars.S3_BUCKET != '' && vars.S3_UPLOAD_AFTER_RUN == 'true'
