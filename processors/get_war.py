@@ -106,7 +106,7 @@ def load_division_data(data_dir: Path, division: str, year: int) -> DivisionData
         pitching=pitching,
         pbp=load_pbp(data_dir, division, year),
         guts=guts,
-        park_factors=pd.read_csv(data_dir / f"park_factors/{prefix}_park_factors.csv"),
+        park_factors=pd.read_csv(data_dir / f"park_factors/pf.csv"),
         rankings=load_rankings(data_dir, division, year),
     )
 

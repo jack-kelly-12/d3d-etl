@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
 
+from processors.pbp_parser.constants import BattedBallType
+from processors.pbp_parser.regexes import RX_FLIED_OUT, RX_GROUNDED_OUT
+
 from .common import (
     aggregate_team,
     fill_missing,
@@ -51,8 +54,8 @@ def k_minus_bb_pct(k_pct_val, bb_pct_val):
     return k_pct_val - bb_pct_val
 
 
-def hr_per_fb(hr, fo):
-    return safe_divide(hr, hr + fo) * 100
+def hr_div_fb(hr, fb):
+    return safe_divide(hr, fb) * 100
 
 
 def inherited_runners_scored_pct(inh_run_score, inh_run):
@@ -92,6 +95,25 @@ def pitching_war(raap9, drpw, replacement, ip):
 
 def reliever_leverage_adjustment(war_val, gmli):
     return war_val * (1 + gmli) / 2
+
+
+def calculate_pitcher_batted_balls(pbp_df: pd.DataFrame) -> pd.DataFrame:
+    valid = pbp_df["pitcher_id"].notna() & (pbp_df["pitcher_id"] != "")
+    df = pbp_df[valid]
+
+    fo_mask = df["play_description"].str.contains(RX_FLIED_OUT, na=False)
+    go_mask = df["play_description"].str.contains(RX_GROUNDED_OUT, na=False)
+    fb_mask = df["batted_ball_type"] == BattedBallType.FLY_BALL
+
+    stats = pd.DataFrame(
+        {
+            "fo": df[fo_mask].groupby("pitcher_id").size(),
+            "go": df[go_mask].groupby("pitcher_id").size(),
+            "fb": df[fb_mask].groupby("pitcher_id").size(),
+        }
+    ).fillna(0).reset_index().rename(columns={"pitcher_id": "player_id"})
+
+    return stats
 
 
 def get_pitcher_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -173,9 +195,8 @@ def add_pitching_stats(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
     df["bb_pct"] = bb_pct(df["bb"], df["bf"])
     df["k_minus_bb_pct"] = k_minus_bb_pct(df["k_pct"], df["bb_pct"])
 
-    if "fo" in df.columns:
-        df["hr_div_fb"] = hr_per_fb(df["hr_a"], df["fo"])
-
+    df["hr_div_fb"] = hr_div_fb(df["hr_a"], df["fb"])
+    
     sfa = df["sfa"].fillna(0) if "sfa" in df.columns else 0
     ab = df["bf"] - df["bb"] - df["hbp"] - sfa
     df["ba_against"] = pitching_ba(df["h"], ab)
@@ -221,6 +242,10 @@ def calculate_pitching_war(
 
     pf_map = park_factors_df.set_index("team_name")["pf"].to_dict()
     df["pf"] = df["team_name"].map(pf_map).fillna(100)
+
+    batted_balls = calculate_pitcher_batted_balls(pbp_df)
+    df = df.merge(batted_balls, on="player_id", how="left")
+    df[["fo", "go", "fb"]] = df[["fo", "go", "fb"]].fillna(0)
 
     df = add_pitching_stats(df, weights)
     valid_mask = df["ip_float"] > 0
@@ -298,8 +323,8 @@ def calculate_team_pitching(
     team_df = aggregate_team(player_df, PITCHING_SUM_COLS)
     team_df = fill_missing(team_df, PITCHING_SUM_COLS)
 
-    pf_map = park_factors_df.set_index("team_name")["pf"].to_dict()
-    team_df["pf"] = team_df["team_name"].map(pf_map).fillna(100)
+    pf_map = park_factors_df.set_index("team_id")["pf"].to_dict()
+    team_df["pf"] = team_df["team_id"].map(pf_map).fillna(100)
 
     team_df["ip"] = team_df["ip_float"].apply(float_to_ip)
 

@@ -395,8 +395,8 @@ def calculate_batting_war(
     df = df[df["ab"] > 0].copy()
     df["gp"] = pd.to_numeric(df["gp"], errors="coerce").fillna(0).astype(int)
 
-    pf_map = park_factors_df.set_index("team_name")["pf"].to_dict()
-    df["pf"] = df["team_name"].map(pf_map).fillna(100)
+    pf_map = park_factors_df.set_index("team_id")["pf"].to_dict()
+    df["pf"] = df["team_id"].map(pf_map).fillna(100)
 
     df = add_batting_stats(df)
     df = add_linear_weights(df, weights)

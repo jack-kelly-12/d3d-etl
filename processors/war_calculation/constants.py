@@ -134,7 +134,6 @@ pitching_columns = [
     "bb_pct",
     "k_minus_bb_pct",
     "hr_div_fb",
-    "ir_a_pct",
     "babip_against",
     "ba_against",
     "obp_against",
@@ -146,6 +145,8 @@ pitching_columns = [
     "clutch",
     "war",
     "sos_adj_war",
+    "fo",
+    "go",
 ]
 
 BATTING_SUM_COLS = [
