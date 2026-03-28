@@ -117,13 +117,15 @@ def main():
                 "--divisions", str(div),
             ])
 
-        for div in args.divisions:
-            run([
+        run(
+            [
                 sys.executable, "-m", "processors.get_guts",
                 "--data_dir", data_dir,
                 "--year", str(year),
-                "--divisions", str(div),
-            ])
+                "--divisions",
+            ]
+            + [str(d) for d in args.divisions]
+        )
 
         for div in args.divisions:
             run([
