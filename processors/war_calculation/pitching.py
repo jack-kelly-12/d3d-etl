@@ -4,14 +4,7 @@ import pandas as pd
 from processors.pbp_parser.constants import BattedBallType
 from processors.pbp_parser.regexes import RX_FLIED_OUT, RX_GROUNDED_OUT
 
-from .common import (
-    aggregate_team,
-    fill_missing,
-    float_to_ip,
-    ip_to_float,
-    safe_divide,
-)
-from .constants import PITCHING_SUM_COLS, pitching_columns
+from .common import safe_divide
 
 
 def era(er, ip):
@@ -96,7 +89,6 @@ def pitching_war(raap9, drpw, replacement, ip):
 def reliever_leverage_adjustment(war_val, gmli):
     return war_val * (1 + gmli) / 2
 
-
 def calculate_pitcher_batted_balls(pbp_df: pd.DataFrame) -> pd.DataFrame:
     valid = pbp_df["pitcher_id"].notna() & (pbp_df["pitcher_id"] != "")
     df = pbp_df[valid]
@@ -115,8 +107,7 @@ def calculate_pitcher_batted_balls(pbp_df: pd.DataFrame) -> pd.DataFrame:
 
     return stats
 
-
-def get_pitcher_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def calculate_pitcher_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = pbp_df.copy()
 
     pitcher_stats = (
@@ -176,13 +167,12 @@ def calculate_gmli(pbp_df: pd.DataFrame) -> pd.DataFrame:
     return result.rename(columns={"li": "gmli"})
 
 
-def add_pitching_stats(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
+def add_pitching_stats(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     ip = df["ip_float"]
     outs = ip * 3
 
-    if "bf" not in df.columns:
-        df["bf"] = outs + df["h"] + df["bb"] + df["hbp"]
+    df["bf"] = outs + df["h"] + df["bb"] + df["hbp"]
 
     df["ra9"] = ra9(df["r"], ip)
     df["k9"] = k9(df["so"], ip)
@@ -196,8 +186,8 @@ def add_pitching_stats(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
     df["k_minus_bb_pct"] = k_minus_bb_pct(df["k_pct"], df["bb_pct"])
 
     df["hr_div_fb"] = hr_div_fb(df["hr_a"], df["fb"])
-    
-    sfa = df["sfa"].fillna(0) if "sfa" in df.columns else 0
+
+    sfa = df["sfa"].fillna(0)
     ab = df["bf"] - df["bb"] - df["hbp"] - sfa
     df["ba_against"] = pitching_ba(df["h"], ab)
     df["obp_against"] = pitching_obp(df["h"], df["bb"], df["hbp"], ab, sfa)
@@ -214,132 +204,3 @@ def add_era_plus(df: pd.DataFrame, valid_mask: pd.Series, lg_era_val: float) -> 
             df.loc[valid_mask, "era"], lg_era_val, df.loc[valid_mask, "pf"]
         )
     return df
-
-
-def calculate_pitching_war(
-    pitching_df: pd.DataFrame,
-    pbp_df: pd.DataFrame,
-    park_factors_df: pd.DataFrame,
-    guts_df: pd.DataFrame,
-    bat_war_total: float,
-    year: int,
-    division: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if pitching_df.empty:
-        return pitching_df, pd.DataFrame()
-
-    weights = guts_df.iloc[0] if not guts_df.empty else None
-    df = pitching_df.copy()
-    if df.columns.duplicated().any():
-        df = df.loc[:, ~df.columns.duplicated()].copy()
-
-    if "b_t" in df.columns:
-        df[["bats", "throws"]] = df["b_t"].str.split("/", n=1, expand=True)
-        df["throws"] = df["throws"].fillna("-")
-
-    df = df[(df["app"] > 0) & df["era"].notna()].copy()
-    df["ip_float"] = df["ip"].apply(ip_to_float)
-
-    pf_map = park_factors_df.set_index("team_name")["pf"].to_dict()
-    df["pf"] = df["team_name"].map(pf_map).fillna(100)
-
-    batted_balls = calculate_pitcher_batted_balls(pbp_df)
-    df = df.merge(batted_balls, on="player_id", how="left")
-    df[["fo", "go", "fb"]] = df[["fo", "go", "fb"]].fillna(0)
-
-    df = add_pitching_stats(df, weights)
-    valid_mask = df["ip_float"] > 0
-
-    lg_era_val = era(df.loc[valid_mask, "er"].sum(), df.loc[valid_mask, "ip_float"].sum()) if valid_mask.any() else 0.0
-    df = add_era_plus(df, valid_mask, lg_era_val)
-
-    conf_ra9_map = {}
-    for conf in df["conference"].unique():
-        conf_df = df[(df["conference"] == conf) & valid_mask]
-        if not conf_df.empty and conf_df["ip_float"].sum() > 0:
-            conf_ra9_map[conf] = ra9(conf_df["r"].sum(), conf_df["ip_float"].sum())
-
-    df["conf_ra9"] = df["conference"].map(conf_ra9_map)
-    df["park_adj_ra9"] = np.where(valid_mask, df["ra9"] / (df["pf"] / 100), np.nan)
-    df["raap9"] = np.where(valid_mask, df["conf_ra9"] - df["park_adj_ra9"], 0)
-    df["ip_per_g"] = safe_divide(df["ip_float"], df["app"])
-    df["drpw"] = np.where(
-        valid_mask, dynamic_rpw(df["ip_per_g"], df["conf_ra9"], df["park_adj_ra9"]), 0
-    )
-    df["replacement_level"] = replacement_level(df["gs"], df["app"])
-    df["war"] = np.where(
-        valid_mask,
-        pitching_war(df["raap9"], df["drpw"], df["replacement_level"], df["ip_float"]),
-        0,
-    )
-
-    gmli_df = calculate_gmli(pbp_df)
-    df = df.merge(gmli_df, left_on="player_id", right_on="pitcher_id", how="left", suffixes=("", "_gmli"))
-    df["gmli"] = df["gmli"].fillna(0)
-    df = df.drop(columns=[c for c in df.columns if c.endswith("_gmli")])
-    valid_mask = df["ip_float"] > 0
-    reliever_mask = (df["gs"] < 3) & valid_mask
-
-    reliever_adj = reliever_leverage_adjustment(df["war"], df["gmli"])
-    df["war"] = np.where(reliever_mask.fillna(False), reliever_adj, df["war"])
-
-    target_war = (bat_war_total * 0.43) / 0.57
-    current_war = df["war"].sum()
-    ip_sum = df.loc[valid_mask, "ip_float"].sum()
-    if ip_sum > 0:
-        war_adj = (target_war - current_war) / ip_sum
-        df.loc[valid_mask, "war"] += war_adj * df.loc[valid_mask, "ip_float"]
-
-    pitcher_clutch, team_clutch = get_pitcher_clutch_stats(pbp_df)
-    df = df.merge(
-        pitcher_clutch[["pitcher_id", "prea", "pwpa", "pwpa_li", "clutch"]],
-        left_on="player_id",
-        right_on="pitcher_id",
-        how="left",
-        suffixes=("", "_clutch"),
-    )
-
-    df = df.replace({np.inf: np.nan, -np.inf: np.nan})
-    df["year"] = year
-    df["division"] = division
-
-    output_cols = [c for c in pitching_columns if c in df.columns and c != "sos_adj_war"]
-    return df[output_cols].dropna(subset=["war"]), team_clutch
-
-
-def calculate_team_pitching(
-    player_df: pd.DataFrame,
-    pbp_df: pd.DataFrame,
-    park_factors_df: pd.DataFrame,
-    guts_df: pd.DataFrame,
-    team_clutch: pd.DataFrame,
-    division: str,
-    year: int,
-) -> pd.DataFrame:
-    if player_df.empty:
-        return pd.DataFrame()
-
-    weights = guts_df.iloc[0] if not guts_df.empty else None
-    team_df = aggregate_team(player_df, PITCHING_SUM_COLS)
-    team_df = fill_missing(team_df, PITCHING_SUM_COLS)
-
-    pf_map = park_factors_df.set_index("team_id")["pf"].to_dict()
-    team_df["pf"] = team_df["team_id"].map(pf_map).fillna(100)
-
-    team_df["ip"] = team_df["ip_float"].apply(float_to_ip)
-
-    valid = team_df["ip_float"] > 0
-    team_df["era"] = np.where(valid, era(team_df["er"], team_df["ip_float"]), np.nan)
-    team_df = add_pitching_stats(team_df, weights)
-
-    team_df = team_df.merge(
-        team_clutch[["pitch_team_id", "prea", "pwpa", "pwpa_li", "clutch"]],
-        left_on="team_id",
-        right_on="pitch_team_id",
-        how="left",
-    )
-
-    team_df["year"] = year
-    team_df["division"] = division
-
-    return team_df

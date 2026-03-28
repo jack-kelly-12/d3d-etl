@@ -3,8 +3,9 @@ import pandas as pd
 
 from processors.pbp_parser.constants import BattedBallType, EventType
 
-from .common import aggregate_team, fill_missing, safe_divide
-from .constants import BATTING_SUM_COLS, batting_columns, position_adjustments
+from .common import safe_divide
+from .constants import position_adjustments
+from .models import GutsConstants
 
 
 def singles(h, doubles, triples, hr):
@@ -71,14 +72,14 @@ def ops_plus(obp, slg, lg_obp, lg_slg):
     return 100 * (safe_divide(obp, lg_obp) + safe_divide(slg, lg_slg) - 1)
 
 
-def woba(bb, hbp, singles, doubles, triples, hr, ab, ibb, sf, weights):
+def woba(bb, hbp, singles, doubles, triples, hr, ab, ibb, sf, guts: GutsConstants):
     num = (
-        weights["wbb"] * bb
-        + weights["whbp"] * hbp
-        + weights["w1b"] * singles
-        + weights["w2b"] * doubles
-        + weights["w3b"] * triples
-        + weights["whr"] * hr
+        guts.wbb * bb
+        + guts.whbp * hbp
+        + guts.w1b * singles
+        + guts.w2b * doubles
+        + guts.w3b * triples
+        + guts.whr * hr
     )
     denom = ab + bb - ibb + sf + hbp
     return safe_divide(num, denom)
@@ -118,17 +119,60 @@ def batting_runs(wraa_val, pa, pf, lg_rpa, conf_rpa):
     return wraa_val + (lg_rpa - pf_adj * lg_rpa) * pa + (lg_rpa - conf_rpa) * pa
 
 
-def position_adjustment(pos, gp, division):
-    games_per_season = 40 if division == 'ncaa_3' else 50
-    base = position_adjustments.get(str(pos).upper(), 0)
-    return base * (gp / games_per_season)
-
-
 def replacement_runs(pa, total_pa, team_count, total_gs, rpw):
     games_played = (total_gs * 2) / team_count
     rep_constant = (team_count / 2) * games_played - team_count * games_played * 0.294
     return (rep_constant * rpw) * safe_divide(pa, total_pa)
 
+
+# ---------------------------------------------------------------------------
+# Position adjustment from lineup data
+# ---------------------------------------------------------------------------
+
+def calculate_position_adjustments(
+    lineups_df: pd.DataFrame, division: str
+) -> pd.DataFrame:
+    """Compute per-player positional adjustment weighted by games at each position.
+
+    Returns a DataFrame with columns ``["player_id", "adjustment"]``.
+    """
+    if lineups_df.empty or "player_id" not in lineups_df.columns:
+        return pd.DataFrame(columns=["player_id", "adjustment"])
+
+    games_per_season = 40 if division == "ncaa_3" else 50
+
+    valid = lineups_df["player_id"].notna() & (lineups_df["player_id"] != "")
+    pos_games = (
+        lineups_df.loc[valid]
+        .groupby(["player_id", "position"])["contest_id"]
+        .nunique()
+        .reset_index()
+        .rename(columns={"contest_id": "games"})
+    )
+
+    pos_games["adj_value"] = (
+        pos_games["position"].str.upper().map(position_adjustments).fillna(0)
+    )
+    pos_games["weighted"] = pos_games["adj_value"] * (pos_games["games"] / games_per_season)
+
+    return (
+        pos_games.groupby("player_id")["weighted"]
+        .sum()
+        .reset_index()
+        .rename(columns={"weighted": "adjustment"})
+    )
+
+
+def fallback_position_adjustment(pos: str, gp: int, division: str) -> float:
+    """Single-position fallback when lineup data is unavailable for a player."""
+    games_per_season = 40 if division == "ncaa_3" else 50
+    base = position_adjustments.get(str(pos).upper(), 0)
+    return base * (gp / games_per_season)
+
+
+# ---------------------------------------------------------------------------
+# PBP-derived stats
+# ---------------------------------------------------------------------------
 
 def get_batter_clutch_stats(pbp_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = pbp_df.copy()
@@ -315,6 +359,10 @@ def calculate_webt(pbp_df: pd.DataFrame, runs_out: float) -> pd.DataFrame:
     return r[["runner_id", "webt", "ebt_opps", "ebt"]]
 
 
+# ---------------------------------------------------------------------------
+# DataFrame-level stat builders
+# ---------------------------------------------------------------------------
+
 def add_batting_stats(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -345,7 +393,7 @@ def add_batting_stats(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_linear_weights(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
+def add_linear_weights(df: pd.DataFrame, guts: GutsConstants) -> pd.DataFrame:
     df = df.copy()
 
     df["woba"] = woba(
@@ -358,142 +406,16 @@ def add_linear_weights(df: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
         df["ab"],
         df["ibb"],
         df["sf"],
-        weights,
+        guts,
     )
 
     lg_rpa = safe_divide(df["r"].sum(), df["pa"].sum())
-    df["wrc"] = wrc(df["woba"], weights["woba"], weights["woba_scale"], lg_rpa, df["pa"])
-    df["wraa"] = wraa(df["woba"], weights["woba"], weights["woba_scale"], df["pa"])
+    df["wrc"] = wrc(df["woba"], guts.woba, guts.woba_scale, lg_rpa, df["pa"])
+    df["wraa"] = wraa(df["woba"], guts.woba, guts.woba_scale, df["pa"])
 
     lg_wrcpa = safe_divide(df["wrc"].sum(), df["pa"].sum())
     df["wrc_plus"] = wrc_plus(df["wraa"], df["pa"], lg_rpa, lg_wrcpa, df["pf"])
 
-    runs_out = weights["runs_out"]
-    df["wsb"] = calc_wsb(df, runs_out)
+    df["wsb"] = calc_wsb(df, guts.runs_out)
 
     return df
-
-
-def calculate_batting_war(
-    batting_df: pd.DataFrame,
-    guts_df: pd.DataFrame,
-    park_factors_df: pd.DataFrame,
-    pbp_df: pd.DataFrame,
-    division: str,
-    year: int,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if batting_df.empty:
-        return batting_df, pd.DataFrame()
-
-    weights = guts_df.iloc[0]
-    df = batting_df.copy()
-
-    if "b_t" in df.columns:
-        df[["bats", "throws"]] = df["b_t"].str.split("/", n=1, expand=True)
-
-    df["pos"] = df["pos"].apply(lambda x: "" if pd.isna(x) else str(x).split("/")[0].upper())
-    df = df[df["ab"] > 0].copy()
-    df["gp"] = pd.to_numeric(df["gp"], errors="coerce").fillna(0).astype(int)
-
-    pf_map = park_factors_df.set_index("team_id")["pf"].to_dict()
-    df["pf"] = df["team_id"].map(pf_map).fillna(100)
-
-    df = add_batting_stats(df)
-    df = add_linear_weights(df, weights)
-
-    gdp_stats = calculate_wgdp(pbp_df)
-    df = df.drop(columns=["gdp"], errors="ignore")  # cube stats have a gdp col that conflicts
-    df = df.merge(gdp_stats, left_on="player_id", right_index=True, how="left")
-    df = fill_missing(df, ["wgdp", "gdp_opps", "gdp"])
-
-    bfh_stats = calculate_bfh(pbp_df)
-    df = df.merge(bfh_stats, left_on="player_id", right_index=True, how="left")
-    df = fill_missing(df, ["bfh"])
-
-    runs_out = weights["runs_out"]
-    webt_stats = calculate_webt(pbp_df, runs_out).rename(columns={"runner_id": "player_id"})
-    df = df.merge(webt_stats, on="player_id", how="left")
-    df = fill_missing(df, ["webt", "ebt_opps", "ebt"])
-    df["baserunning"] = df["wsb"] + df["wgdp"] + df["webt"]
-
-    player_clutch, team_clutch = get_batter_clutch_stats(pbp_df)
-    df = df.merge(
-        player_clutch[["batter_id", "rea", "wpa", "wpa_li", "clutch"]],
-        left_on="player_id",
-        right_on="batter_id",
-        how="left",
-    )
-
-    lg_rpa = safe_divide(df["r"].sum(), df["pa"].sum())
-    conf_rpa = df.groupby("conference")["r"].transform("sum") / df.groupby("conference")[
-        "pa"
-    ].transform("sum")
-    conf_rpa = conf_rpa.fillna(lg_rpa)
-
-    df["batting"] = batting_runs(df["wraa"], df["pa"], df["pf"], lg_rpa, conf_rpa)
-    df["adjustment"] = df.apply(lambda r: position_adjustment(r["pos"], r["gp"], division), axis=1)
-
-    team_count = max(len(df["team_name"].unique()), 1)
-    df["replacement_level_runs"] = replacement_runs(
-        df["pa"], df["pa"].sum(), team_count, guts_df["total_games"].iloc[0], weights["runs_win"]
-    )
-
-    for conf in df["conference"].unique():
-        mask = df["conference"] == conf
-        lg_total = (
-            df.loc[mask, "batting"].sum()
-            + df.loc[mask, "wsb"].sum()
-            + df.loc[mask, "adjustment"].sum()
-        )
-        lg_pa = df.loc[mask, "pa"].sum()
-        df.loc[mask, "league_adjustment"] = (-lg_total / lg_pa if lg_pa > 0 else 0) * df.loc[mask, "pa"]
-
-    df["war"] = (
-        df["batting"]
-        + df["replacement_level_runs"]
-        + df["baserunning"]
-        + df["adjustment"]
-        + df["league_adjustment"]
-    ) / weights["runs_win"]
-
-    df["year"] = year
-    df["division"] = division
-    df = df.replace({np.inf: np.nan, -np.inf: np.nan})
-
-    output_cols = [c for c in batting_columns if c in df.columns and c != "sos_adj_war"]
-    return df[output_cols].dropna(subset=["war"]), team_clutch
-
-
-def calculate_team_batting(
-    player_df: pd.DataFrame,
-    guts_df: pd.DataFrame,
-    park_factors_df: pd.DataFrame,
-    team_clutch: pd.DataFrame,
-    division: str,
-    year: int,
-) -> pd.DataFrame:
-    if player_df.empty:
-        return pd.DataFrame()
-
-    weights = guts_df.iloc[0]
-
-    team_df = aggregate_team(player_df, BATTING_SUM_COLS)
-    team_df = fill_missing(team_df, BATTING_SUM_COLS)
-
-    pf_map = park_factors_df.set_index("team_name")["pf"].to_dict()
-    team_df["pf"] = team_df["team_name"].map(pf_map).fillna(100)
-
-    team_df = add_batting_stats(team_df)
-    team_df = add_linear_weights(team_df, weights)
-
-    team_df = team_df.merge(
-        team_clutch[["bat_team_id", "rea", "wpa", "wpa_li", "clutch"]],
-        left_on="team_id",
-        right_on="bat_team_id",
-        how="left",
-    )
-
-    team_df["year"] = year
-    team_df["division"] = division
-
-    return team_df

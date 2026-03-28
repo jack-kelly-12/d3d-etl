@@ -83,7 +83,8 @@ def sos_reward_punish(
     if clip_sd is not None:
         bp["diff_z"] = bp["diff_z"].clip(-clip_sd, clip_sd)
 
-    bp["sos_adj_war"] = bp["war"] * (1 + alpha * bp["diff_z"] * np.sign(bp["war"]).replace(0, 1.0))
+    war_sign = np.where(bp["war"] == 0, 1.0, np.sign(bp["war"]))
+    bp["sos_adj_war"] = bp["war"] * (1 + alpha * bp["diff_z"] * war_sign)
 
     def _rescale(g):
         raw = g["war"].sum()
@@ -121,8 +122,6 @@ def normalize_division_war(bat_df, pitch_df, standings_df, division, year, pitch
     sp = 1.0 if pitch_total == 0 else target_pitch / max(pitch_total, 1e-12)
 
     for col in ("war", "sos_adj_war"):
-        if col not in bat_df.columns or col not in pitch_df.columns:
-            raise ValueError(f"{col} missing before division normalization")
         bat_df[col] *= sb
         pitch_df[col] *= sp
 

@@ -4,16 +4,13 @@ from pathlib import Path
 import pandas as pd
 
 from processors.logging_utils import div_file_prefix, division_year_label, get_logger
-from processors.war_calculation.batting import calculate_batting_war, calculate_team_batting
-from processors.war_calculation.constants import (
-    BAT_STAT_COLUMNS,
-    PITCH_STAT_COLUMNS,
-    REP_WP,
-    batting_columns,
-    pitching_columns,
+from processors.war_calculation.calculator import WARCalculator
+from processors.war_calculation.constants import BAT_STAT_COLUMNS, PITCH_STAT_COLUMNS, REP_WP
+from processors.war_calculation.models import (
+    BattingWarSchema,
+    PitchingWarSchema,
+    WarResults,
 )
-from processors.war_calculation.pitching import calculate_pitching_war, calculate_team_pitching
-from processors.war_calculation.sos_utils import normalize_division_war, sos_reward_punish
 
 logger = get_logger(__name__)
 
@@ -26,6 +23,7 @@ class DivisionData:
     guts: pd.DataFrame
     park_factors: pd.DataFrame
     rankings: pd.DataFrame
+    lineups: pd.DataFrame
 
 
 def load_stats(data_dir: Path, division: str, year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -41,7 +39,8 @@ def load_stats(data_dir: Path, division: str, year: int) -> tuple[pd.DataFrame, 
         pitching = pd.read_csv(data_dir / f"cube_stats/{prefix}_pitching_{year}.csv")
 
         map_path = data_dir / "ncaa_to_cube_player_map.csv"
-        if map_path.exists() and "cube_player_id" in batting.columns:
+        cube_ids = batting.get("cube_player_id")
+        if map_path.exists() and cube_ids is not None:
             pmap = pd.read_csv(map_path, dtype={"cube_player_id": "Int64", "player_id": "str"})
             pmap = pmap.dropna(subset=["cube_player_id", "player_id"])
             pmap = pmap[pmap["year"] == year][["cube_player_id", "player_id"]].drop_duplicates(subset=["cube_player_id"])
@@ -51,18 +50,21 @@ def load_stats(data_dir: Path, division: str, year: int) -> tuple[pd.DataFrame, 
             pitching = pitching.merge(pmap, on="cube_player_id", how="left")
 
     player_info_path = data_dir / "cube_stats/cube_player_info.csv"
-    if player_info_path.exists() and "pos" not in batting.columns:
-        player_info = pd.read_csv(player_info_path, dtype={"player_id": str}, usecols=["player_id", "positions"])
+    if player_info_path.exists():
+        player_info = pd.read_csv(player_info_path, dtype=str, usecols=["player_id", "positions"])
         player_info["pos"] = player_info["positions"].str.split(",").str[0].str.strip()
-        player_info = player_info[["player_id", "pos"]]
-        batting = batting.merge(player_info, on="player_id", how="left")
+        pos_map = player_info.set_index("player_id")["pos"]
+        existing_pos = batting.get("pos", pd.Series("", index=batting.index))
+        batting["pos"] = existing_pos.where(
+            existing_pos.notna() & (existing_pos != ""),
+            batting["player_id"].map(pos_map),
+        )
 
-    for col in BAT_STAT_COLUMNS:
-        if col in batting.columns:
-            batting[col] = batting[col].fillna(0)
-    for col in PITCH_STAT_COLUMNS:
-        if col in pitching.columns:
-            pitching[col] = pitching[col].fillna(0)
+    batting = batting.assign(**dict.fromkeys(set(BAT_STAT_COLUMNS) - set(batting.columns), 0))
+    batting[BAT_STAT_COLUMNS] = batting[BAT_STAT_COLUMNS].fillna(0)
+
+    pitching = pitching.assign(**dict.fromkeys(set(PITCH_STAT_COLUMNS) - set(pitching.columns), 0))
+    pitching[PITCH_STAT_COLUMNS] = pitching[PITCH_STAT_COLUMNS].fillna(0)
 
     return batting, pitching
 
@@ -91,8 +93,15 @@ def load_rankings(data_dir: Path, division: str, year: int) -> pd.DataFrame:
     return rankings
 
 
-def load_division_data(data_dir: Path, division: str, year: int) -> DivisionData:
+def load_lineups(data_dir: Path, division: str, year: int) -> pd.DataFrame:
     prefix = div_file_prefix(division)
+    path = data_dir / f"lineups/{prefix}_batting_lineups_{year}.csv"
+    if path.exists():
+        return pd.read_csv(path, dtype={"player_id": str})
+    return pd.DataFrame()
+
+
+def load_division_data(data_dir: Path, division: str, year: int) -> DivisionData:
     batting, pitching = load_stats(data_dir, division, year)
 
     guts = pd.read_csv(data_dir / "guts/guts_constants.csv")
@@ -106,81 +115,42 @@ def load_division_data(data_dir: Path, division: str, year: int) -> DivisionData
         pitching=pitching,
         pbp=load_pbp(data_dir, division, year),
         guts=guts,
-        park_factors=pd.read_csv(data_dir / f"park_factors/pf.csv"),
+        park_factors=pd.read_csv(data_dir / "park_factors/pf.csv"),
         rankings=load_rankings(data_dir, division, year),
+        lineups=load_lineups(data_dir, division, year),
     )
-
-
-def filter_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    return df[[c for c in columns if c in df.columns]]
 
 
 def process_division(
     data: DivisionData, mappings: pd.DataFrame, division: str, year: int
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    # Really hacky way to pass total games to batting war function for replacement runs
-    data.guts = data.guts.copy()
-    data.guts["total_games"] = data.pitching['gs'].sum() / 2
-    batting_war, team_batting_clutch = calculate_batting_war(
-        data.batting, data.guts, data.park_factors, data.pbp, division, year
-    )
-
-    pitching_war, team_pitching_clutch = calculate_pitching_war(
-        data.pitching,
-        data.pbp,
-        data.park_factors,
-        data.guts,
-        bat_war_total=batting_war["war"].sum(),
-        year=year,
+) -> WarResults:
+    calculator = WARCalculator(
+        batting_df=data.batting,
+        pitching_df=data.pitching,
+        pbp_df=data.pbp,
+        guts_df=data.guts,
+        park_factors_df=data.park_factors,
+        lineups_df=data.lineups,
+        rankings_df=data.rankings,
+        mappings_df=mappings,
         division=division,
+        year=year,
     )
-
-    batting_war, pitching_war, missing = sos_reward_punish(
-        batting_war,
-        pitching_war,
-        data.rankings,
-        mappings,
-        division,
-        year,
-        alpha=0.2,
-        clip_sd=3,
-        group_keys=("year", "division"),
-        harder_if="higher",
-    )
-    if missing:
-        logger.info("  SoS missing for %s teams", len(missing))
-
-    batting_team = calculate_team_batting(
-        batting_war, data.guts, data.park_factors, team_batting_clutch, division, year
-    )
-    pitching_team = calculate_team_pitching(
-        pitching_war, data.pbp, data.park_factors, data.guts, team_pitching_clutch, division, year
-    )
-
-    batting_war, pitching_war = normalize_division_war(
-        batting_war, pitching_war, data.rankings, division, year
-    )
-
-    return batting_war, pitching_war, batting_team, pitching_team
+    return calculator.run()
 
 
 def save_war_files(
     war_dir: Path,
     division: str,
     year: int,
-    batting_war: pd.DataFrame,
-    pitching_war: pd.DataFrame,
-    batting_team: pd.DataFrame,
-    pitching_team: pd.DataFrame,
+    results: WarResults,
 ):
     prefix = div_file_prefix(division)
     files = {
-        f"{prefix}_batting_war_{year}.csv": filter_columns(batting_war, batting_columns),
-        f"{prefix}_pitching_war_{year}.csv": filter_columns(pitching_war, pitching_columns),
-        f"{prefix}_batting_team_war_{year}.csv": filter_columns(batting_team, batting_columns),
-        f"{prefix}_pitching_team_war_{year}.csv": filter_columns(
-            pitching_team, pitching_columns
-        ),
+        f"{prefix}_batting_war_{year}.csv": BattingWarSchema.select(results.batting),
+        f"{prefix}_pitching_war_{year}.csv": PitchingWarSchema.select(results.pitching),
+        f"{prefix}_batting_team_war_{year}.csv": BattingWarSchema.select(results.batting_team),
+        f"{prefix}_pitching_team_war_{year}.csv": PitchingWarSchema.select(results.pitching_team),
     }
 
     for filename, df in files.items():
@@ -208,17 +178,13 @@ def calculate_war(data_dir: Path, year: int, divisions: list[str] = None):
             logger.warning("  Skipping: %s", e)
             continue
 
-        batting_war, pitching_war, batting_team, pitching_team = process_division(
-            data, mappings, division, year
-        )
+        results = process_division(data, mappings, division, year)
 
-        save_war_files(
-            war_dir, division, year, batting_war, pitching_war, batting_team, pitching_team
-        )
+        save_war_files(war_dir, division, year, results)
 
         standings = data.rankings
         target = standings["wins"].sum() - REP_WP * standings["games"].sum()
-        actual = batting_war["war"].sum() + pitching_war["war"].sum()
+        actual = results.batting["war"].sum() + results.pitching["war"].sum()
         logger.info("  Target WAR: %.1f | Actual: %.1f", target, actual)
 
     logger.info("Done!")

@@ -42,13 +42,8 @@ def aggregate_team(
     if first_cols is None:
         first_cols = ["conference", "team_id"]
 
-    agg = {}
-    for col in sum_cols:
-        if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
-            agg[col] = "sum"
-    for col in first_cols:
-        if col in df.columns:
-            agg[col] = "first"
+    agg = dict.fromkeys(sum_cols, "sum")
+    agg.update(dict.fromkeys(first_cols, "first"))
 
     return df.groupby("team_name").agg(agg).reset_index()
 
@@ -56,6 +51,5 @@ def aggregate_team(
 def fill_missing(df: pd.DataFrame, cols: list[str], fill_value=0) -> pd.DataFrame:
     df = df.copy()
     for col in cols:
-        if col in df.columns:
-            df[col] = df[col].fillna(fill_value)
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(fill_value)
     return df
