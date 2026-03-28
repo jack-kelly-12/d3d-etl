@@ -32,8 +32,9 @@ Usage via CLI::
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union, get_args, get_origin
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -99,6 +100,44 @@ class _WARSchema(BaseModel):
         """
         return df[cls.columns()]
 
+    @classmethod
+    def _resolve_type(cls, annotation: Any) -> tuple[type, bool]:
+        """Return (base_type, is_nullable) for a field annotation."""
+        origin = get_origin(annotation)
+        if origin is Union or isinstance(annotation, types.UnionType):
+            args = get_args(annotation)
+            non_none = [a for a in args if a is not type(None)]
+            return (non_none[0] if non_none else str), type(None) in args
+        return annotation, False
+
+    @classmethod
+    def finalize(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensure columns, cast to schema dtypes, and select.
+
+        - ``int`` columns: NaN filled with default, cast to ``int64``
+        - ``int | None`` columns: cast to nullable ``Int64``
+        - ``float`` columns: left as ``float64``
+        - ``str`` columns: NaN filled with default, cast to ``str``
+        """
+        cls.ensure_columns(df)
+        out = df[cls.columns()].copy()
+
+        for name, info in cls.model_fields.items():
+            col = info.alias if info.alias else name
+            base, nullable = cls._resolve_type(info.annotation)
+
+            if base is int:
+                if nullable:
+                    out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+                else:
+                    out[col] = pd.to_numeric(out[col], errors="coerce").fillna(info.default).astype("int64")
+            elif base is float:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+            elif base is str:
+                out[col] = out[col].fillna(info.default).astype(str)
+
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Input schemas — cube stats columns the pipeline expects at the start.
@@ -108,7 +147,6 @@ class _WARSchema(BaseModel):
 
 class BattingInputSchema(_WARSchema):
 
-    # -- player bio --
     player_name: str = ""
     cube_player_id: int | None = None
     player_id: str = ""
@@ -116,12 +154,10 @@ class BattingInputSchema(_WARSchema):
     bats: str = ""
     pos: str = ""
 
-    # -- team --
     team_name: str = ""
     team_id: str = ""
     conference: str = ""
 
-    # -- counting stats --
     gp: int = 0
     gs: int = 0
     ab: int = 0
@@ -143,7 +179,6 @@ class BattingInputSchema(_WARSchema):
     cs: int = 0
     gdp: int = 0
 
-    # -- rates from cube stats --
     ba: float = 0.0
     ob_pct: float = 0.0
     slg_pct: float = 0.0
@@ -156,18 +191,16 @@ class BattingInputSchema(_WARSchema):
 
 class PitchingInputSchema(_WARSchema):
 
-    # -- player bio --
     player_name: str = ""
     player_id: str = ""
     player_class: str = Field(default="", alias="class")
+    number: str = ""
     throws: str = ""
 
-    # -- team --
     team_name: str = ""
     team_id: str = ""
     conference: str = ""
 
-    # -- record / counting stats --
     app: int = 0
     gs: int = 0
     w: int = 0
@@ -186,9 +219,7 @@ class PitchingInputSchema(_WARSchema):
     ibb: int = 0
     sfa: int = 0
     sha: int = 0
-    pitches: int = 0
 
-    # -- rates from cube stats --
     era: float = 0.0
     ra9: float = 0.0
     k9: float = 0.0
@@ -196,12 +227,6 @@ class PitchingInputSchema(_WARSchema):
     h9: float = 0.0
     hr9: float = 0.0
     whip: float = 0.0
-
-
-# ---------------------------------------------------------------------------
-# Output schemas — full WAR output shape including computed + PBP columns.
-# Applied at the end of the pipeline via ensure_columns + select.
-# ---------------------------------------------------------------------------
 
 
 class BattingWarSchema(_WARSchema):
@@ -268,7 +293,7 @@ class BattingWarSchema(_WARSchema):
     bfh: int = 0
 
     batting: float = 0.0
-    adjustment: float = 0.0
+    positional_adjustment: float = 0.0
     league_adjustment: float = 0.0
 
     rea: float = 0.0
@@ -285,8 +310,8 @@ class PitchingWarSchema(_WARSchema):
     player_name: str = ""
     player_id: str = ""
     player_class: str = Field(default="", alias="class")
+    number: str = ""
     throws: str = ""
-    ht: str = ""
 
     team_name: str = ""
     team_id: str = ""
@@ -314,7 +339,6 @@ class PitchingWarSchema(_WARSchema):
     ibb: int = 0
     sfa: int = 0
     sha: int = 0
-    pitches: int = 0
 
     era: float = 0.0
     ra9: float = 0.0
@@ -336,7 +360,7 @@ class PitchingWarSchema(_WARSchema):
     go: int = 0
     fb: int = 0
 
-    gmli: float = 0.0
+    gmli: float | None = None
     prea: float = 0.0
     pwpa: float = 0.0
     pwpa_li: float = 0.0

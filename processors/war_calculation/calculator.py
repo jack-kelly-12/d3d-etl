@@ -10,10 +10,10 @@ from .batting import (
     add_linear_weights,
     batting_runs,
     calculate_bfh,
-    calculate_position_adjustments,
+    calculate_adjustments,
     calculate_webt,
     calculate_wgdp,
-    fallback_position_adjustment,
+    fallback_adjustment,
     get_batter_clutch_stats,
     replacement_runs,
 )
@@ -37,7 +37,7 @@ from .pitching import (
     calculate_pitcher_clutch_stats,
     pitching_war,
     ra9,
-    reliever_leverage_adjustment,
+    leverage_adjustment,
     replacement_level,
 )
 from .sos_utils import normalize_division_war, sos_reward_punish
@@ -112,16 +112,11 @@ class WARCalculator:
         if missing:
             logger.info("  SoS missing for %s teams", len(missing))
 
-        BattingWarSchema.ensure_columns(bat_war)
-        PitchingWarSchema.ensure_columns(pitch_war)
-        BattingWarSchema.ensure_columns(bat_team)
-        PitchingWarSchema.ensure_columns(pitch_team)
-
         return WarResults(
-            batting=BattingWarSchema.select(bat_war),
-            pitching=PitchingWarSchema.select(pitch_war),
-            batting_team=BattingWarSchema.select(bat_team),
-            pitching_team=PitchingWarSchema.select(pitch_team),
+            batting=BattingWarSchema.finalize(bat_war),
+            pitching=PitchingWarSchema.finalize(pitch_war),
+            batting_team=BattingWarSchema.finalize(bat_team),
+            pitching_team=PitchingWarSchema.finalize(pitch_team),
             sos_missing=missing,
         )
 
@@ -179,18 +174,18 @@ class WARCalculator:
 
         df["batting"] = batting_runs(df["wraa"], df["pa"], df["pf"], lg_rpa, conf_rpa)
 
-        pos_adj = calculate_position_adjustments(self._lineups, self.division)
+        pos_adj = calculate_adjustments(self._lineups, self.division)
         if not pos_adj.empty:
             df = df.merge(pos_adj, on="player_id", how="left")
-            has_lineup = df["adjustment"].notna()
+            has_lineup = df["positional_adjustment"].notna()
             fallback = df.apply(
-                lambda r: fallback_position_adjustment(r["pos"], r["gp"], self.division),
+                lambda r: fallback_adjustment(r["pos"], r["gp"], self.division),
                 axis=1,
             )
-            df["adjustment"] = df["adjustment"].where(has_lineup, fallback)
+            df["positional_adjustment"] = df["positional_adjustment"].where(has_lineup, fallback)
         else:
-            df["adjustment"] = df.apply(
-                lambda r: fallback_position_adjustment(r["pos"], r["gp"], self.division),
+            df["positional_adjustment"] = df.apply(
+                lambda r: fallback_adjustment(r["pos"], r["gp"], self.division),
                 axis=1,
             )
 
@@ -204,7 +199,7 @@ class WARCalculator:
             lg_total = (
                 df.loc[mask, "batting"].sum()
                 + df.loc[mask, "wsb"].sum()
-                + df.loc[mask, "adjustment"].sum()
+                + df.loc[mask, "positional_adjustment"].sum()
             )
             lg_pa = df.loc[mask, "pa"].sum()
             df.loc[mask, "league_adjustment"] = (
@@ -215,7 +210,7 @@ class WARCalculator:
             df["batting"]
             + df["replacement_level_runs"]
             + df["baserunning"]
-            + df["adjustment"]
+            + df["positional_adjustment"]
             + df["league_adjustment"]
         ) / self.guts.runs_win
 
@@ -223,8 +218,9 @@ class WARCalculator:
         df["division"] = self.division
         numeric = df.select_dtypes(include="number")
         df[numeric.columns] = numeric.where(np.isfinite(numeric))
+        df["war"] = pd.to_numeric(df["war"], errors="coerce").fillna(0)
 
-        return df.dropna(subset=["war"]), team_clutch
+        return df, team_clutch
 
     def _pitching_war(self, bat_war_total: float) -> tuple[pd.DataFrame, pd.DataFrame]:
         if self._pitching_raw.empty:
@@ -288,13 +284,14 @@ class WARCalculator:
             how="left",
             suffixes=("", "_gmli"),
         )
-        df["gmli"] = df["gmli"].fillna(0)
         df = df.drop(columns=[c for c in df.columns if c.endswith("_gmli")])
 
         valid_mask = df["ip_float"] > 0
-        reliever_mask = (df["gs"] < 3) & valid_mask
-        reliever_adj = reliever_leverage_adjustment(df["war"], df["gmli"])
-        df["war"] = np.where(reliever_mask.fillna(False), reliever_adj, df["war"])
+        df["war"] = np.where(
+            valid_mask.fillna(False),
+            leverage_adjustment(df["war"], df["gmli"].fillna(0), df["app"], df["gs"]),
+            df["war"],
+        )
 
         target_war = (bat_war_total * 0.43) / 0.57
         current_war = df["war"].sum()
@@ -316,8 +313,9 @@ class WARCalculator:
         df[numeric.columns] = numeric.where(np.isfinite(numeric))
         df["year"] = self.year
         df["division"] = self.division
+        df["war"] = pd.to_numeric(df["war"], errors="coerce").fillna(0)
 
-        return df.dropna(subset=["war"]), team_clutch
+        return df, team_clutch
 
     def _batting_team(
         self, batting_war: pd.DataFrame, team_clutch: pd.DataFrame

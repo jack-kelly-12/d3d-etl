@@ -4,7 +4,7 @@ import pandas as pd
 from processors.pbp_parser.constants import BattedBallType, EventType
 
 from .common import safe_divide
-from .constants import position_adjustments
+from .constants import adjustments
 from .models import GutsConstants
 
 
@@ -129,17 +129,14 @@ def replacement_runs(pa, total_pa, team_count, total_gs, rpw):
 # Position adjustment from lineup data
 # ---------------------------------------------------------------------------
 
-def calculate_position_adjustments(
+def calculate_adjustments(
     lineups_df: pd.DataFrame, division: str
 ) -> pd.DataFrame:
-    """Compute per-player positional adjustment weighted by games at each position.
-
-    Returns a DataFrame with columns ``["player_id", "adjustment"]``.
-    """
-    if lineups_df.empty or "player_id" not in lineups_df.columns:
-        return pd.DataFrame(columns=["player_id", "adjustment"])
+    if lineups_df.empty:
+        return pd.DataFrame(columns=["player_id", "positional_adjustment"])
 
     games_per_season = 40 if division == "ncaa_3" else 50
+    lineups_df['position'] = lineups_df['position'].fillna('').str.split('/').str[0].str.lower()
 
     valid = lineups_df["player_id"].notna() & (lineups_df["player_id"] != "")
     pos_games = (
@@ -151,22 +148,22 @@ def calculate_position_adjustments(
     )
 
     pos_games["adj_value"] = (
-        pos_games["position"].str.upper().map(position_adjustments).fillna(0)
+        pos_games["position"].map(adjustments).fillna(0)
     )
     pos_games["weighted"] = pos_games["adj_value"] * (pos_games["games"] / games_per_season)
-
+    
     return (
         pos_games.groupby("player_id")["weighted"]
         .sum()
         .reset_index()
-        .rename(columns={"weighted": "adjustment"})
+        .rename(columns={"weighted": "positional_adjustment"})
     )
 
 
-def fallback_position_adjustment(pos: str, gp: int, division: str) -> float:
+def fallback_adjustment(pos: str, gp: int, division: str) -> float:
     """Single-position fallback when lineup data is unavailable for a player."""
     games_per_season = 40 if division == "ncaa_3" else 50
-    base = position_adjustments.get(str(pos).upper(), 0)
+    base = adjustments.get(str(pos).lower(), 0)
     return base * (gp / games_per_season)
 
 

@@ -7,7 +7,7 @@ import pandas as pd
 
 from processors.logging_utils import get_logger
 
-YEARS = [2026]
+YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
 DIVISIONS = ['ncaa_1', 'ncaa_2', 'ncaa_3']
 logger = get_logger(__name__)
 
@@ -93,7 +93,7 @@ def main():
 
         run(
             [
-                sys.executable, "-m", "processors.pbp_parser.main",
+                sys.executable, "-m", "processors.pbp_parser",
                 "--data_dir", data_dir,
                 "--year", str(year),
                 "--divisions",

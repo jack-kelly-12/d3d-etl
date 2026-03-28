@@ -15,22 +15,21 @@ def prepare_lineups(
     batting = batting_lineups.copy()
     pitching = pitching_lineups.copy()
 
-    if "player_id" not in batting.columns:
-        batting["player_id"] = pd.NA
-    if "player_id" not in pitching.columns:
-        pitching["player_id"] = pd.NA
-
     batting["player_name"] = batting["player_name"].apply(format_name)
-    batting["team_id"] = batting.groupby("contest_id")["team_id"].transform(
-        lambda x: x.ffill().bfill()
+    batting["team_id"] = (
+        batting.groupby("contest_id")["team_id"]
+        .transform(lambda x: x.ffill().bfill())
+        .infer_objects(copy=False)
+        .astype(str)
     )
-    batting["team_id"] = batting["team_id"].astype(str)
 
     pitching["player_name"] = pitching["player_name"].apply(format_name)
-    pitching["team_id"] = pitching.groupby("contest_id")["team_id"].transform(
-        lambda x: x.ffill().bfill()
+    pitching["team_id"] = (
+        pitching.groupby("contest_id")["team_id"]
+        .transform(lambda x: x.ffill().bfill())
+        .infer_objects(copy=False)
+        .astype(str)
     )
-    pitching["team_id"] = pitching["team_id"].astype(str)
 
     if "pitch_order" not in pitching.columns:
         pitching["pitch_order"] = pitching.groupby(["contest_id", "team_id"]).cumcount()

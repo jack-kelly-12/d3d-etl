@@ -85,9 +85,10 @@ def pitching_war(raap9, drpw, replacement, ip):
     wpgar = wpgaa + replacement
     return wpgar * (ip / 9)
 
-
-def reliever_leverage_adjustment(war_val, gmli):
-    return war_val * (1 + gmli) / 2
+def leverage_adjustment(war_val, gmli, app, gs):
+    relief_pct = np.where(app > 0, (app - gs) / app, 0)
+    multiplier = relief_pct * (1 + gmli) / 2 + (1 - relief_pct)
+    return war_val * multiplier
 
 def calculate_pitcher_batted_balls(pbp_df: pd.DataFrame) -> pd.DataFrame:
     valid = pbp_df["pitcher_id"].notna() & (pbp_df["pitcher_id"] != "")
