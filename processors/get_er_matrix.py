@@ -82,7 +82,10 @@ def main(data_dir, year, divisions=None):
                 logger.warning("Play by play file not found: %s", pbp_file)
                 continue
 
-            pbp_df = pd.read_csv(pbp_file)
+            pbp_df = pd.read_csv(
+                pbp_file,
+                usecols=["bases_before", "outs_before", "runs_roi"],
+            )
             logger.info("Loaded %s rows for %s", len(pbp_df), division_year_label(division, year))
 
             bases_before = pbp_df["bases_before"]
