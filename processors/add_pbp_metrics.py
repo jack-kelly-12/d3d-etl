@@ -76,7 +76,7 @@ def add_run_expectancy(df: pd.DataFrame, re_lookup: dict) -> pd.DataFrame:
 
     def get_re_after(row):
         if row.get("inn_end_fl") == 1:
-            return pd.NA
+            return 0.0
         bases = row.get("bases_after")
         outs = row.get("outs_after")
         if int(outs) == 3:
@@ -157,7 +157,13 @@ def add_win_expectancy_and_leverage(
             elif away > home:
                 return 0.0
             else:
-                return pd.NA
+                diff = int(row["score_diff_after"]) if pd.notna(row["score_diff_after"]) else 0
+                eff_inn = int(row["_eff_inn"])
+                half = row["half"]
+                runners = row["bases_after"]
+                outs = int(row.get("outs_after"))
+                key = (eff_inn, half, runners, outs, diff)
+                return we_lookup.get(key)
 
         diff = int(row["score_diff_after"]) if pd.notna(row["score_diff_after"]) else 0
         eff_inn = int(row["_eff_inn"])
