@@ -125,6 +125,7 @@ def load_pbp_with_hands(data_dir, year: int, division: str) -> pd.DataFrame:
     pbp_df = pd.read_csv(
         data_dir / f"pbp/{prefix}_pbp_with_metrics_{year}.csv",
         dtype={"player_id": str, "batter_id": str, "pitcher_id": str},
+        low_memory=False,
     )
 
     # Old pbp files may have NaN team name columns (dtype float64) — fill from the ID column

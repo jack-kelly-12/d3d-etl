@@ -1,3 +1,4 @@
+import gc
 from pathlib import Path
 
 import pandas as pd
@@ -77,6 +78,9 @@ def run_analysis(data_dir: Path, year: int, division: str) -> dict[str, pd.DataF
 
     value_results = analyze_value(pbp_df, data_dir, year, division)
     results.update(value_results)
+
+    del pbp_df
+    gc.collect()
 
     return results
 
@@ -202,12 +206,10 @@ def main(data_dir: str, year: int, divisions: list[str] = None):
 
                     overlap = set(combined["team_id"]) & set(team_info["team_id"])
                     if overlap:
-                        # Pull conference (and team_name if missing) from team_history
                         merge_cols = ["team_id", "division", "year"]
                         pull_cols = [c for c in ["conference", "team_name"] if c in team_info.columns]
                         combined = combined.drop(columns=pull_cols, errors="ignore")
                         combined = combined.merge(team_info[merge_cols + pull_cols], on=merge_cols, how="left")
-                    # else: team_id format mismatch — keep existing team_name/conference as-is
 
                 combined.to_csv(existing_file, index=False)
                 logger.info("Saved %s: %s records", name, len(combined))
@@ -217,6 +219,7 @@ def main(data_dir: str, year: int, divisions: list[str] = None):
                     del data_list
 
             del results
+            gc.collect()
 
         except FileNotFoundError as e:
             logger.warning("Skipping %s: %s", division_year_label(division, year), e)

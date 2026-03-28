@@ -101,45 +101,37 @@ def main():
             + [str(d) for d in args.divisions]
         )
 
-        run(
-            [
+        for div in args.divisions:
+            run([
                 sys.executable, "-m", "processors.add_pbp_metrics",
                 "--data_dir", data_dir,
                 "--year", str(year),
-                "--divisions",
-            ]
-            + [str(d) for d in args.divisions]
-        )
+                "--divisions", str(div),
+            ])
 
-        run(
-            [
+        for div in args.divisions:
+            run([
                 sys.executable, "-m", "processors.get_linear_weights",
                 "--data_dir", data_dir,
                 "--year", str(year),
-                "--divisions",
-            ]
-            + [str(d) for d in args.divisions]
-        )
+                "--divisions", str(div),
+            ])
 
-        run(
-            [
+        for div in args.divisions:
+            run([
                 sys.executable, "-m", "processors.get_guts",
                 "--data_dir", data_dir,
                 "--year", str(year),
-                "--divisions",
-            ]
-            + [str(d) for d in args.divisions]
-        )
+                "--divisions", str(div),
+            ])
 
-        run(
-            [
+        for div in args.divisions:
+            run([
                 sys.executable, "-m", "processors.get_er_matrix",
                 "--data_dir", data_dir,
                 "--year", str(year),
-                "--divisions",
-            ]
-            + [str(d) for d in args.divisions]
-        )
+                "--divisions", str(div),
+            ])
 
         run(
             [
@@ -151,15 +143,13 @@ def main():
             + [str(d) for d in args.divisions]
         )
 
-        run(
-            [
+        for div in args.divisions:
+            run([
                 sys.executable, "-m", "processors.leaderboards.main",
                 "--data_dir", data_dir,
                 "--year", str(year),
-                "--divisions",
-            ]
-            + [str(d) for d in args.divisions]
-        )
+                "--divisions", str(div),
+            ])
 
 
 if __name__ == "__main__":
