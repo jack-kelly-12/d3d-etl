@@ -159,7 +159,8 @@ def _apply_ncaa_ids(
     ncaa_history_path: Path,
 ) -> None:
     team_map = pd.read_csv(team_mappings_path, usecols=["ncaa_team_name", "org_id", "cube_college_id", "ncaa_slug"])
-    ncaa_history = pd.read_csv(ncaa_history_path, usecols=["org_id", "year", "conference"])
+    ncaa_history = pd.read_csv(ncaa_history_path, usecols=["org_id", "year", "conference", "division"])
+    ncaa_history = ncaa_history.rename(columns={"division": "ncaa_division"})
 
     for year in years:
         for stat_type in ("batting", "pitching"):
@@ -191,10 +192,18 @@ def _apply_ncaa_ids(
                     axis=1,
                 )
 
+            has_ncaa_div = merged["ncaa_division"].notna()
+            merged.loc[has_ncaa_div, "division"] = merged.loc[has_ncaa_div, "ncaa_division"]
+            wrong_div = merged["division"] != division
+            if wrong_div.any():
+                bad_teams = merged.loc[wrong_div, "team_id"].unique()
+                print(f"  removing {wrong_div.sum()} rows from {len(bad_teams)} teams not in {division}")
+                merged = merged[~wrong_div]
+
             print(f"\n--- {path.name} ---")
             merged["team_id"] = merged["ncaa_slug"]
             merged["team_name"] = merged["ncaa_team_name"]
-            merged = merged.drop(columns=["ncaa_slug", "ncaa_team_name", "org_id"])
+            merged = merged.drop(columns=["ncaa_slug", "ncaa_team_name", "org_id", "ncaa_division"])
             merged.to_csv(path, index=False)
             print(f"  saved {path.name}")
 
@@ -212,14 +221,21 @@ def scrape_cube_stats(
         years = list(YEARS)
 
     history = pd.read_csv(team_history_file)
-    div_teams = history[history["division"] == division].copy()
-    if div_teams.empty:
-        print(f"[error] no teams found for division '{division}'")
+
+    year_college_ids: dict[int, set] = {}
+    for year in years:
+        yt = history[(history["division"] == division) & (history["year"] == year)]
+        year_college_ids[year] = set(yt["college_id"].unique())
+
+    all_ids = set().union(*year_college_ids.values()) if year_college_ids else set()
+    if not all_ids:
+        print(f"[error] no teams found for division '{division}' in years {years}")
         print(f"  available: {sorted(history['division'].unique())}")
         return
 
     colleges = (
-        div_teams[["college_id", "college_name"]]
+        history[history["college_id"].isin(all_ids)]
+        [["college_id", "college_name"]]
         .drop_duplicates(subset=["college_id"])
         .sort_values("college_name")
         .reset_index(drop=True)
@@ -245,6 +261,9 @@ def scrape_cube_stats(
             print(f"\n[{idx + 1}/{total}] {college_name}")
 
             for year in years:
+                if college_id not in year_college_ids[year]:
+                    continue
+
                 url = _stats_url(college_id, year)
                 school_meta = {"year": year, "college": college_name, "team_id": college_id, "division": division, "conference": ""}
 

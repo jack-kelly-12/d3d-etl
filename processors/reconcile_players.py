@@ -302,7 +302,7 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
         return
 
     logger.info("Loading cube_player_info...")
-    cube_info = pd.read_csv(cube_info_path, dtype={"player_id": str})
+    cube_info = pd.read_csv(cube_info_path, dtype={"player_id": str}, low_memory=False)
     cube_info = cube_info.dropna(subset=["player_id"])
     cube_info["player_id"] = cube_info["player_id"].astype(str).str.strip()
     cube_info = cube_info[cube_info["player_id"] != ""]

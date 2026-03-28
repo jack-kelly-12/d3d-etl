@@ -16,6 +16,15 @@ YEAR_SUFFIX_RE = re.compile(r"_(\d{4})$")
 
 DEDUP_KEYS = {
     "pbp": ["contest_id", "play_id"],
+    "batting": ["player_id", "year", "division"],
+    "pitching": ["player_id", "year", "division"],
+    "batting_team": ["team_id", "year", "division"],
+    "pitching_team": ["team_id", "year", "division"],
+    "batting_lineups": ["player_id", "contest_id", "position"],
+    "pitching_lineups": ["player_id", "contest_id"],
+    "expected_runs": ["division", "year", "bases"],
+    "guts_constants": ["division", "year"],
+    "schedules": ["contest_id"],
 }
 
 
@@ -109,15 +118,24 @@ def _load_table_bulk(
         df = df.drop_duplicates(subset=dedup_keys, keep="first")
 
     if year is not None and "year" in df.columns:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+        year_df = df[df["year"] == year]
         if _table_exists(conn, table):
             conn.execute(f"DELETE FROM [{table}] WHERE year = ?", (year,))
-            df.to_sql(table, conn, if_exists="append", index=False)
+            if not year_df.empty:
+                year_df.to_sql(table, conn, if_exists="append", index=False)
         else:
             df.to_sql(table, conn, if_exists="replace", index=False)
     else:
         df.to_sql(table, conn, if_exists="replace", index=False)
 
-    print(f"  {table}: {len(df):,} rows")
+    if dedup_keys and all(k in df.columns for k in dedup_keys) and _table_exists(conn, table):
+        removed = _dedup_sql(conn, table, dedup_keys)
+        if removed:
+            print(f"  {table}: deduped {removed:,} rows on {dedup_keys}")
+
+    count = conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0] if _table_exists(conn, table) else len(df)
+    print(f"  {table}: {count:,} rows")
 
 
 def _load_table_streaming(
@@ -141,6 +159,12 @@ def _load_table_streaming(
         except Exception as e:
             print(f"  warning: {path.name}: {e}", file=sys.stderr)
             continue
+
+        if year is not None and "year" in df.columns:
+            df["year"] = pd.to_numeric(df["year"], errors="coerce")
+            df = df[df["year"] == year]
+            if df.empty:
+                continue
 
         mode = "replace" if first else "append"
         df.to_sql(table, conn, if_exists=mode, index=False)

@@ -111,6 +111,7 @@ class WARCalculator:
 
         if missing:
             logger.info("  SoS missing for %s teams", len(missing))
+            logger.info("  %s", missing)
 
         return WarResults(
             batting=BattingWarSchema.finalize(bat_war),

@@ -15,6 +15,8 @@ def load_guts(data_path, division: str, year: int) -> dict:
     path = data_path / "guts/guts_constants.csv"
     guts = pd.read_csv(path)
     row = guts[(guts["division"] == division) & (guts["year"] == year)]
+    if row.empty:
+        raise FileNotFoundError(f"No GUTS constants for {division} {year}")
     return row.iloc[0].to_dict()
 
 

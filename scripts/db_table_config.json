@@ -33,7 +33,6 @@
   { "pattern": "pbp/*_pbp_with_metrics_*.csv",              "table": "pbp" },
 
   { "pattern": "schedules/*_schedules_*.csv",  "table": "schedules" },
-  { "pattern": "rankings/*_rankings_*.csv",    "table": "rankings" },
 
   { "pattern": "lineups/*_batting_lineups_*.csv",  "table": "batting_lineups" },
   { "pattern": "lineups/*_pitching_lineups_*.csv", "table": "pitching_lineups" },

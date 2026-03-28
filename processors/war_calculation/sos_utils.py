@@ -62,13 +62,17 @@ def sos_reward_punish(
     min_sos = pd.to_numeric(rankings_df["sos_val"], errors="coerce").min()
     for df_ in (b, p):
         df_["sos_val"] = pd.to_numeric(df_.get("sos_val"), errors="coerce")
-        df_["sos_val"] = df_["sos_val"].fillna(min_sos)
         df_["year"] = year
         df_["division"] = division
 
-    missing_teams = sorted(
-        set(b.loc[b["sos_val"].isna(), "team_name"]) | set(p.loc[p["sos_val"].isna(), "team_name"])
+    missing_names = (
+        set(b.loc[b["sos_val"].isna(), "team_name"].dropna())
+        | set(p.loc[p["sos_val"].isna(), "team_name"].dropna())
     )
+    missing_teams = sorted(missing_names)
+
+    for df_ in (b, p):
+        df_["sos_val"] = df_["sos_val"].fillna(min_sos)
 
     bp = pd.concat(
         [b.assign(component="batting"), p.assign(component="pitching")], ignore_index=True
@@ -89,7 +93,7 @@ def sos_reward_punish(
     def _rescale(g):
         raw = g["war"].sum()
         adj = g["sos_adj_war"].sum()
-        s = 1.0 if adj == 0 else raw / max(adj, 1e-12)
+        s = 1.0 if abs(adj) < 1e-12 else raw / adj
         g["sos_adj_war"] *= s
         return g
 

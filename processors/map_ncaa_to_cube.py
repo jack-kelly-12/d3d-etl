@@ -5,8 +5,9 @@ Matching cascade (per team+year):
   1. Jersey number (when available)
   2. Exact full name
   3. Last name (unique within team)
-  4. First initial + last name (unique within team)
-  5. Fuzzy token_sort_ratio >= threshold
+  4. Jersey number as name
+  5. First initial + last name (unique within team)
+  6. Fuzzy token_sort_ratio >= threshold
 """
 import argparse
 import re
@@ -56,7 +57,6 @@ def _load_cube_lookup(data_dir: Path, divisions: list[str], years: list[int]) ->
     combined = combined[~combined["player_id"].isin({"", "nan", "None"})]
     combined["year"] = pd.to_numeric(combined["year"], errors="coerce").astype("Int64")
 
-    # Normalize team_id: if numeric, convert via team_mappings → ncaa_slug
     numeric_mask = combined["team_id"].str.match(r"^\d+$", na=False)
     if numeric_mask.any():
         tm_path = data_dir / "team_mappings.csv"
