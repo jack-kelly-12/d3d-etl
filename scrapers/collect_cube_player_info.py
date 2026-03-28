@@ -75,14 +75,21 @@ def _collect_player_ids(
     return sorted(ids)
 
 
-def _done_player_ids(out_path: Path) -> set[int]:
+def _done_player_ids(out_path: Path) -> tuple[set[int], set[str]]:
+    """Return (done cube_player_ids, done player_ids) already in the output file.
+
+    Checks both columns so stubs added by reconcile_players (which have
+    cube_player_id=NaN but a valid player_id) are recognised as already done.
+    """
     if not out_path.exists():
-        return set()
+        return set(), set()
     try:
-        df = pd.read_csv(out_path, usecols=["cube_player_id"])
-        return set(df["cube_player_id"].dropna().astype(int).unique())
+        df = pd.read_csv(out_path, usecols=["cube_player_id", "player_id"], dtype=str)
+        cube_ids = set(pd.to_numeric(df["cube_player_id"], errors="coerce").dropna().astype(int))
+        player_ids = set(df["player_id"].dropna().unique())
+        return cube_ids, player_ids
     except Exception:
-        return set()
+        return set(), set()
 
 
 def _extract_college_id(href: str) -> str | None:
@@ -213,9 +220,12 @@ def scrape_cube_player_info(
     print(f"[info] {len(all_ids)} unique player_ids found across data files{filter_desc}")
 
     if run_remaining:
-        done = _done_player_ids(out_path)
-        ids = [pid for pid in all_ids if pid not in done]
-        print(f"[info] {len(done)} already scraped, {len(ids)} remaining")
+        done_cube, done_player = _done_player_ids(out_path)
+        ids = [
+            pid for pid in all_ids
+            if pid not in done_cube and hash_player_id(pid, SALT) not in done_player
+        ]
+        print(f"[info] {len(done_cube)} already scraped, {len(ids)} remaining")
     else:
         ids = all_ids
 

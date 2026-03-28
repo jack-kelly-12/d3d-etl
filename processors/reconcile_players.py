@@ -565,6 +565,12 @@ def add_missing_players_to_cube_info(data_dir: Path) -> None:
         added = len(missing)
         logger.info("added %d missing players", added)
 
+    before = len(cube_info)
+    cube_info = cube_info.drop_duplicates(subset=["player_id"], keep="first")
+    dupes = before - len(cube_info)
+    if dupes:
+        logger.warning("dropped %d duplicate player_id rows", dupes)
+
     cube_info.to_csv(cube_info_path, index=False)
     logger.info("cube_player_info saved: %d total rows", len(cube_info))
 
