@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from processors.pbp_parser.constants import BattedBallType
+from processors.pbp_parser.constants import BattedBallType, EventType
 from processors.pbp_parser.regexes import RX_FLIED_OUT, RX_GROUNDED_OUT
 
 from .common import safe_divide
@@ -45,10 +45,6 @@ def bb_pct(bb, bf):
 
 def k_minus_bb_pct(k_pct_val, bb_pct_val):
     return k_pct_val - bb_pct_val
-
-
-def hr_div_fb(hr, fb):
-    return safe_divide(hr, fb) * 100
 
 
 def inherited_runners_scored_pct(inh_run_score, inh_run):
@@ -97,14 +93,18 @@ def calculate_pitcher_batted_balls(pbp_df: pd.DataFrame) -> pd.DataFrame:
     fo_mask = df["play_description"].str.contains(RX_FLIED_OUT, na=False)
     go_mask = df["play_description"].str.contains(RX_GROUNDED_OUT, na=False)
     fb_mask = df["batted_ball_type"] == BattedBallType.FLY_BALL
+    hr_mask = df['event_type'] == EventType.HOME_RUN
 
     stats = pd.DataFrame(
         {
             "fo": df[fo_mask].groupby("pitcher_id").size(),
             "go": df[go_mask].groupby("pitcher_id").size(),
             "fb": df[fb_mask].groupby("pitcher_id").size(),
+            "hr": df[hr_mask].groupby("pitcher_id").size(),
         }
     ).fillna(0).reset_index().rename(columns={"pitcher_id": "player_id"})
+    stats["hr_div_fb"] = safe_divide(stats["hr"], stats["fb"]) * 100
+    stats.drop(columns=["hr"], inplace=True)
 
     return stats
 
@@ -186,7 +186,6 @@ def add_pitching_stats(df: pd.DataFrame) -> pd.DataFrame:
     df["bb_pct"] = bb_pct(df["bb"], df["bf"])
     df["k_minus_bb_pct"] = k_minus_bb_pct(df["k_pct"], df["bb_pct"])
 
-    df["hr_div_fb"] = hr_div_fb(df["hr_a"], df["fb"])
 
     sfa = df["sfa"].fillna(0)
     ab = df["bf"] - df["bb"] - df["hbp"] - sfa
