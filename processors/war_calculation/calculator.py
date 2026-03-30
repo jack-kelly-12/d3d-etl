@@ -243,7 +243,7 @@ class WARCalculator:
         df = df.drop(columns=["fo", "go"], errors="ignore")
         batted_balls = calculate_pitcher_batted_balls(self._pbp)
         df = df.merge(batted_balls, on="player_id", how="left")
-        df = fill_missing(df, ["fo", "go", "fb"])
+        df = fill_missing(df, ["fo", "go", "fb", "hr_div_fb"])
 
         df = add_pitching_stats(df)
         valid_mask = df["ip_float"] > 0
