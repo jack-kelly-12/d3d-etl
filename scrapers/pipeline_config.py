@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+_DIV_ENV = re.compile(r"^ncaa_(\d+)$", re.IGNORECASE)
 
 
 def _parse_int_list(raw: str | None, default: list[int]) -> list[int]:
@@ -20,6 +23,22 @@ def _parse_int_list(raw: str | None, default: list[int]) -> list[int]:
     return out or default
 
 
+def _parse_division_list(raw: str | None, default: list[int]) -> list[int]:
+    if not raw:
+        return default
+    out: list[int] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        m = _DIV_ENV.fullmatch(token)
+        if m:
+            out.append(int(m.group(1)))
+        else:
+            out.append(int(token))
+    return out or default
+
+
 def _parse_bool(raw: str | None, default: bool) -> bool:
     if raw is None:
         return default
@@ -28,6 +47,13 @@ def _parse_bool(raw: str | None, default: bool) -> bool:
 
 def _env_path(key: str, default: str) -> Path:
     return Path(os.getenv(key, default)).expanduser().resolve()
+
+
+def _rankings_dir(data_root: Path) -> Path:
+    raw = os.getenv("RANKINGS_OUTDIR") or os.getenv("RANKINGS_DATA_DIR")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return data_root
 
 
 def _normalize_bucket_and_prefix(
@@ -72,6 +98,7 @@ class PipelineConfig:
     s3_sync_delete: bool
     s3_sse_mode: str | None
     s3_sse_kms_key_id: str | None
+    cube_player_info_workers: int
 
     @classmethod
     def from_env(cls, env_file: str | None = None) -> PipelineConfig:
@@ -85,15 +112,15 @@ class PipelineConfig:
 
         return cls(
             years=_parse_int_list(os.getenv("YEARS"), [2026]),
-            divisions=_parse_int_list(os.getenv("DIVISIONS"), [1, 2, 3]),
-            base_delay=float(os.getenv("BASE_DELAY", "10.0")),
+            divisions=_parse_division_list(os.getenv("DIVISIONS"), [1, 2, 3]),
+            base_delay=float(os.getenv("BASE_DELAY", "8.0")),
             data_root=data_root,
             team_ids_file=_env_path("TEAM_IDS_FILE", str(data_root / "ncaa_team_history.csv")),
             schedules_outdir=_env_path("SCHEDULES_OUTDIR", str(data_root / "schedules")),
             stats_outdir=_env_path("STATS_OUTDIR", str(data_root / "stats")),
             pbp_outdir=_env_path("PBP_OUTDIR", str(data_root / "pbp")),
             lineups_outdir=_env_path("LINEUPS_OUTDIR", str(data_root / "lineups")),
-            rankings_data_dir=_env_path("RANKINGS_DATA_DIR", str(data_root)),
+            rankings_data_dir=_rankings_dir(data_root),
             s3_bucket=s3_bucket,
             s3_prefix=s3_prefix,
             s3_region=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or None,
@@ -102,4 +129,5 @@ class PipelineConfig:
             s3_sync_delete=_parse_bool(os.getenv("S3_SYNC_DELETE"), False),
             s3_sse_mode=(os.getenv("S3_SSE_MODE") or "").strip() or None,
             s3_sse_kms_key_id=(os.getenv("S3_SSE_KMS_KEY_ID") or "").strip() or None,
+            cube_player_info_workers=int(os.getenv("CUBE_PLAYER_INFO_WORKERS", "8")),
         )

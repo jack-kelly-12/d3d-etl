@@ -9,18 +9,19 @@ from urllib.parse import urljoin
 
 import cloudscraper
 import pandas as pd
+import requests
 from bs4 import BeautifulSoup
 
 from scrapers.constants import (
     CUBE_BATTING_RENAMES,
     CUBE_COLUMN_RENAMES,
     CUBE_PITCHING_RENAMES,
+    CUBE_STATS_YEARS,
 )
 from scripts.hash_player_ids import SALT, hash_player_id, generate_id_for_missing
 
 BASE_URL = "https://thebaseballcube.com"
-YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
-
+  
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -218,51 +219,59 @@ def scrape_cube_stats(
     ncaa_history_file: str = "/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv",
 ):
     if years is None:
-        years = list(YEARS)
+        years = list(CUBE_STATS_YEARS)
 
+    years_sorted = sorted(years)
     history = pd.read_csv(team_history_file)
 
-    year_college_ids: dict[int, set] = {}
-    for year in years:
+    all_ids: set = set()
+    total_school_years = 0
+    for year in years_sorted:
         yt = history[(history["division"] == division) & (history["year"] == year)]
-        year_college_ids[year] = set(yt["college_id"].unique())
+        all_ids.update(yt["college_id"].dropna().unique())
+        total_school_years += yt["college_id"].nunique()
 
-    all_ids = set().union(*year_college_ids.values()) if year_college_ids else set()
     if not all_ids:
-        print(f"[error] no teams found for division '{division}' in years {years}")
+        print(f"[error] no teams found for division '{division}' in years {years_sorted}")
         print(f"  available: {sorted(history['division'].unique())}")
         return
-
-    colleges = (
-        history[history["college_id"].isin(all_ids)]
-        [["college_id", "college_name"]]
-        .drop_duplicates(subset=["college_id"])
-        .sort_values("college_name")
-        .reset_index(drop=True)
-    )
 
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
 
-    all_bat: dict[int, list[pd.DataFrame]] = {y: [] for y in years}
-    all_pit: dict[int, list[pd.DataFrame]] = {y: [] for y in years}
+    all_bat: dict[int, list[pd.DataFrame]] = {y: [] for y in years_sorted}
+    all_pit: dict[int, list[pd.DataFrame]] = {y: [] for y in years_sorted}
 
-    total = len(colleges)
-    print(f"\n=== {division} cube stats {years} — {total} schools ===")
+    n_distinct_schools = len(all_ids)
+    print(
+        f"\n=== {division} cube stats {years_sorted} — "
+        f"{n_distinct_schools} distinct schools, {total_school_years} school-seasons "
+        f"(year-by-year, chronological) ==="
+    )
 
     session = cloudscraper.create_scraper()
     session.headers.update(HEADERS)
 
     try:
-        for idx, row in enumerate(colleges.itertuples(index=False)):
-            college_name = row.college_name
-            college_id = row.college_id
+        n_scrapes = 0
+        for year in years_sorted:
+            yt = history[(history["division"] == division) & (history["year"] == year)]
+            colleges_year = (
+                yt[["college_id", "college_name"]]
+                .drop_duplicates(subset=["college_id"])
+                .sort_values("college_name")
+                .reset_index(drop=True)
+            )
+            n_year = len(colleges_year)
+            if n_year == 0:
+                continue
+            print(f"\n--- {year} ({division}): {n_year} schools ---")
 
-            print(f"\n[{idx + 1}/{total}] {college_name}")
+            for idx, row in enumerate(colleges_year.itertuples(index=False)):
+                college_name = row.college_name
+                college_id = row.college_id
 
-            for year in years:
-                if college_id not in year_college_ids[year]:
-                    continue
+                print(f"\n  [{idx + 1}/{n_year}] {college_name}")
 
                 url = _stats_url(college_id, year)
                 school_meta = {"year": year, "college": college_name, "team_id": college_id, "division": division, "conference": ""}
@@ -287,28 +296,29 @@ def scrape_cube_stats(
                     continue
 
                 if df_bat.empty and df_pit.empty:
-                    print(f"  {year} no data on TBC")
+                    print(f"  no data on TBC")
                     continue
 
                 if not df_bat.empty:
                     all_bat[year].append(_apply_player_id_hash(df_bat))
-                    print(f"  {year} batting  -> {len(df_bat)} rows")
+                    print(f"  batting  -> {len(df_bat)} rows")
                 if not df_pit.empty:
                     all_pit[year].append(_apply_player_id_hash(df_pit))
-                    print(f"  {year} pitching -> {len(df_pit)} rows")
+                    print(f"  pitching -> {len(df_pit)} rows")
 
                 time.sleep(1.0)
 
-            if (idx + 1) % batch_size == 0 and idx + 1 < total:
-                cooldown = random.uniform(15.0, 20.0)
-                print(f"\n[cooldown] sleeping {cooldown:.1f}s after {idx + 1} schools")
-                time.sleep(cooldown)
+                n_scrapes += 1
+                if n_scrapes % batch_size == 0 and n_scrapes < total_school_years:
+                    cooldown = random.uniform(15.0, 20.0)
+                    print(f"\n[cooldown] sleeping {cooldown:.1f}s after {n_scrapes} school-seasons")
+                    time.sleep(cooldown)
 
     finally:
         session.close()
 
     print("\n[writing] saving scraped data...")
-    for year in years:
+    for year in years_sorted:
         if all_bat[year]:
             out = outdir_path / f"{division}_batting_{year}.csv"
             pd.concat(all_bat[year], ignore_index=True).to_csv(out, index=False)
@@ -319,7 +329,7 @@ def scrape_cube_stats(
             print(f"  wrote {out.name}")
 
     print("\n[ncaa ids] applying team mappings...")
-    _apply_ncaa_ids(outdir_path, division, years, Path(team_mappings_file), Path(ncaa_history_file))
+    _apply_ncaa_ids(outdir_path, division, years_sorted, Path(team_mappings_file), Path(ncaa_history_file))
 
 
 if __name__ == "__main__":
@@ -328,7 +338,7 @@ if __name__ == "__main__":
     parser.add_argument("--team_history_file", default="/Users/jackkelly/Desktop/d3d-etl/data/cube_team_history.csv")
     parser.add_argument("--division", required=True)
     parser.add_argument("--outdir", default="/Users/jackkelly/Desktop/d3d-etl/data/cube_stats")
-    parser.add_argument("--year", "--years", dest="years", nargs="+", type=int, default=YEARS)
+    parser.add_argument("--year", "--years", dest="years", nargs="+", type=int, default=CUBE_STATS_YEARS)
     parser.add_argument("--batch_size", type=int, default=50)
     parser.add_argument("--team_mappings_file", default="/Users/jackkelly/Desktop/d3d-etl/data/team_mappings.csv")
     parser.add_argument("--ncaa_history_file", default="/Users/jackkelly/Desktop/d3d-etl/data/ncaa_team_history.csv")

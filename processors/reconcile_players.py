@@ -306,9 +306,6 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
     cube_info = cube_info.dropna(subset=["player_id"])
     cube_info["player_id"] = cube_info["player_id"].astype(str).str.strip()
     cube_info = cube_info[cube_info["player_id"] != ""]
-    if "img_url" not in cube_info.columns:
-        cube_info["img_url"] = ""
-
     logger.info("Loading team mappings...")
     tm = pd.read_csv(team_map_path, usecols=["org_id", "cube_college_id", "school_name", "ncaa_team_name"])
     tm = tm.dropna(subset=["org_id", "cube_college_id"])
@@ -385,7 +382,7 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
         path = data_dir / "headshots" / f"team_headshots_{year}.csv"
         if path.exists():
             try:
-                df = pd.read_csv(path, usecols=["team", "year", "name", "img_url", "roster_url"])
+                df = pd.read_csv(path, usecols=["team", "year", "name", "img_url", "roster_url", "b_t", "highschool"])
                 hs_frames.append(df)
             except Exception:
                 pass
@@ -395,12 +392,13 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
         return
 
     hs = pd.concat(hs_frames, ignore_index=True)
-    hs = hs[hs["img_url"].notna() & (hs["img_url"].astype(str).str.strip() != "")]
     hs["year"] = pd.to_numeric(hs["year"], errors="coerce").astype("Int64")
     hs = hs.dropna(subset=["team", "name", "year"])
     hs["name_clean"] = hs["name"].map(clean_name)
     hs["name_norm"] = hs["name_clean"].map(normalize_name)
     hs["img_url"] = hs["img_url"].map(norm)
+    hs["b_t"] = hs["b_t"].map(normalize_b_t)
+    hs["high_school"] = hs["highschool"].map(clean_high_school)
 
     hs["org_id"] = hs["team"].astype(str).str.strip().map(lambda t: name_to_org.get(t))
     hs = hs.dropna(subset=["org_id"])
@@ -416,7 +414,7 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
         cube_team_id = int(hs_row["cube_college_id"])
         year = int(hs_row["year"])
         name_norm = hs_row["name_norm"]
-        img_url = hs_row["img_url"]
+        img_url = norm(hs_row.get("img_url", ""))
         if img_url.startswith("/"):
             base = get_base_url(_s(hs_row.get("roster_url", "")))
             if base:
@@ -428,14 +426,23 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
             (stats["name_norm"] == name_norm)
         ]
 
-        if not candidates.empty:
-            player_id = candidates.iloc[0]["player_id"]
-            matched.append({
+        def _make_match(player_id, match_type):
+            return {
                 "player_id": player_id,
                 "img_url": img_url,
+                "b_t": _s(hs_row.get("b_t", "")),
+                "high_school": _s(hs_row.get("high_school", "")),
+                "height": _s(hs_row.get("height", "")),
+                "weight": _s(hs_row.get("weight", "")),
+                "pos": _s(hs_row.get("pos", "")),
+                "class": _s(hs_row.get("class", "")),
+                "hometown": _s(hs_row.get("hometown", "")),
                 "year": year,
-                "match_type": "direct",
-            })
+                "match_type": match_type,
+            }
+
+        if not candidates.empty:
+            matched.append(_make_match(candidates.iloc[0]["player_id"], "direct"))
             continue
 
         candidates = stats[
@@ -449,12 +456,7 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
             if match:
                 matched_name = match[0]
                 matched_row = candidates[candidates["name_norm"] == matched_name].iloc[0]
-                matched.append({
-                    "player_id": matched_row["player_id"],
-                    "img_url": img_url,
-                    "year": year,
-                    "match_type": "fuzzy",
-                })
+                matched.append(_make_match(matched_row["player_id"], "fuzzy"))
                 continue
 
         candidates = stats[stats["team_id"] == cube_team_id]
@@ -464,12 +466,7 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
             if match:
                 matched_name = match[0]
                 matched_row = candidates[candidates["name_norm"] == matched_name].iloc[0]
-                matched.append({
-                    "player_id": matched_row["player_id"],
-                    "img_url": img_url,
-                    "year": year,
-                    "match_type": "fuzzy_fallback",
-                })
+                matched.append(_make_match(matched_row["player_id"], "fuzzy_fallback"))
 
     if not matched:
         logger.warning("no headshots matched to players")
@@ -482,13 +479,30 @@ def assign_headshots_to_cube_player_info(data_dir: Path) -> None:
 
     match_counts = all_matches["match_type"].value_counts().to_dict()
     player_img = dict(zip(all_matches["player_id"], all_matches["img_url"]))
+    player_bt = dict(zip(all_matches["player_id"], all_matches["b_t"]))
+    player_hs = dict(zip(all_matches["player_id"], all_matches["high_school"]))
 
-    # Update img_url using player_id (never null) - preserve existing if no match found
+    # Update img_url - preserve existing if no match found
     existing_img = cube_info["img_url"].map(norm)
-    cube_info["img_url"] = cube_info["player_id"].map(player_img)
-    # Fill missing with existing img_url, then normalize
-    cube_info["img_url"] = cube_info["img_url"].fillna(existing_img)
-    cube_info["img_url"] = cube_info["img_url"].map(norm)
+    cube_info["img_url"] = cube_info["player_id"].map(player_img).fillna(existing_img).map(norm)
+
+    def _split_bt(bt):
+        parts = _s(bt).split("/")
+        return (parts[0] if parts else "", parts[1] if len(parts) > 1 else "")
+
+    incoming_bt = cube_info["player_id"].map(player_bt).map(lambda x: normalize_b_t(_s(x)))
+    existing_bats = cube_info["bats"].map(norm)
+    existing_throws = cube_info["throws"].map(norm)
+    cube_info["bats"] = existing_bats.where(
+        existing_bats != "", incoming_bt.map(lambda bt: _split_bt(bt)[0])
+    )
+    cube_info["throws"] = existing_throws.where(
+        existing_throws != "", incoming_bt.map(lambda bt: _split_bt(bt)[1])
+    )
+
+    existing_hs = cube_info["high_school"].map(norm)
+    incoming_hs = cube_info["player_id"].map(player_hs).map(lambda x: clean_high_school(_s(x)))
+    cube_info["high_school"] = existing_hs.where(existing_hs != "", incoming_hs)
 
     cube_info.to_csv(cube_info_path, index=False)
     logger.info("assigned %d headshot urls to cube_player_info (direct: %d, fuzzy: %d, fuzzy_fallback: %d)",
@@ -518,11 +532,7 @@ def add_missing_players_to_cube_info(data_dir: Path) -> None:
     for pattern in ("*_batting_*.csv", "*_pitching_*.csv"):
         for path in sorted((data_dir / "cube_stats").glob(pattern)):
             try:
-                header = pd.read_csv(path, nrows=0).columns.tolist()
-                cols = [c for c in ["player_id", "player_name"] if c in header]
-                if "player_id" not in cols:
-                    continue
-                df = pd.read_csv(path, usecols=cols, dtype={"player_id": str})
+                df = pd.read_csv(path, usecols=["player_id", "player_name"], dtype={"player_id": str})
                 frames.append(df)
             except Exception:
                 pass
@@ -536,30 +546,28 @@ def add_missing_players_to_cube_info(data_dir: Path) -> None:
     all_players = all_players.dropna(subset=["player_id"])
     all_players = all_players[all_players["player_id"] != ""]
     # Keep a non-empty name where possible
-    if "player_name" in all_players.columns:
-        all_players["player_name"] = all_players["player_name"].map(norm)
-        all_players = all_players.sort_values("player_name", na_position="last")
+    all_players["player_name"] = all_players["player_name"].map(norm)
+    all_players = all_players.sort_values("player_name", na_position="last")
     all_players = all_players.drop_duplicates(subset=["player_id"], keep="first")
 
     existing_ids = set(cube_info["player_id"])
-    name_map = all_players.set_index("player_id")["player_name"].to_dict() if "player_name" in all_players.columns else {}
+    name_map = all_players.set_index("player_id")["player_name"].to_dict()
 
-    # Fill blank player_name for existing rows (prefer cube_stats name)
-    if "player_name" in cube_info.columns and name_map:
-        blank = cube_info["player_name"].isna() | (cube_info["player_name"].astype(str).str.strip() == "")
-        cube_info.loc[blank, "player_name"] = cube_info.loc[blank, "player_id"].map(name_map)
-        filled = int(blank.sum())
-        if filled:
-            logger.info("filled player_name for %d existing rows", filled)
+    blank = cube_info["player_name"].isna() | (cube_info["player_name"].astype(str).str.strip() == "")
+    cube_info.loc[blank, "player_name"] = cube_info.loc[blank, "player_id"].map(name_map)
+    filled = int(blank.sum())
+    if filled:
+        logger.info("filled player_name for %d existing rows", filled)
 
     # Add stub rows for completely missing player_ids
     missing = all_players[~all_players["player_id"].isin(existing_ids)]
     added = 0
     if not missing.empty:
         existing_cols = cube_info.columns.tolist()
-        stub: dict = {"player_id": missing["player_id"].values}
-        if "player_name" in missing.columns and "player_name" in existing_cols:
-            stub["player_name"] = missing["player_name"].values
+        stub = {
+            "player_id": missing["player_id"].values,
+            "player_name": missing["player_name"].values,
+        }
         stubs = pd.DataFrame(stub).reindex(columns=existing_cols)
         cube_info = pd.concat([cube_info, stubs], ignore_index=True)
         added = len(missing)

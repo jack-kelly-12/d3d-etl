@@ -1,14 +1,31 @@
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from s3_utils.sync import sync_directory_to_s3, sync_s3_prefix_to_directory
 
+from .constants import CUBE_STATS_YEARS
 from .pipeline_config import PipelineConfig
 from .scraper_utils import get_scraper_logger
 
 logger = get_scraper_logger(__name__)
+
+_DIV_ARG = re.compile(r"^ncaa_(\d+)$", re.IGNORECASE)
+
+
+def _parse_division_arg(s: str) -> int:
+    t = s.strip()
+    m = _DIV_ARG.fullmatch(t)
+    if m:
+        return int(m.group(1))
+    try:
+        return int(t)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"division must be an integer or ncaa_N (e.g. 1 or ncaa_1), got {s!r}"
+        ) from e
 
 
 def _run_command(cmd: list[str], cwd: Path) -> bool:
@@ -26,63 +43,95 @@ def _ncaa_divs(cfg: PipelineConfig) -> list[str]:
     return [f"ncaa_{d}" for d in cfg.divisions]
 
 
-def _build_year_commands(project_root: Path, year: int, cfg: PipelineConfig) -> list[list[str]]:
-    ncaa_divs = _ncaa_divs(cfg)
+def _line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        with path.open("rb") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
 
+
+def _build_collect_schedules_cmd(year: int, cfg: PipelineConfig) -> list[str]:
+    ncaa_divs = _ncaa_divs(cfg)
     return [
-        [
-            sys.executable,
-            "-m",
-            "scrapers.collect_schedules",
-            "--year", str(year),
-            "--divisions", *ncaa_divs,
-            "--team_ids_file", str(cfg.team_ids_file),
-            "--outdir", str(cfg.schedules_outdir),
-            "--base_delay", str(cfg.base_delay),
-        ],
-        [
-            sys.executable,
-            "-m",
-            "scrapers.collect_game",
-            "--year", str(year),
-            "--divisions", *ncaa_divs,
-            "--indir", str(cfg.schedules_outdir),
-            "--pbp_outdir", str(cfg.pbp_outdir),
-            "--lineups_outdir", str(cfg.lineups_outdir),
-            "--base_delay", str(cfg.base_delay),
-        ],
+        sys.executable,
+        "-m",
+        "scrapers.collect_schedules",
+        "--year", str(year),
+        "--divisions", *ncaa_divs,
+        "--team_ids_file", str(cfg.team_ids_file),
+        "--outdir", str(cfg.schedules_outdir),
     ]
 
 
-def _build_cube_commands(cfg: PipelineConfig) -> list[list[str]]:
-    years_args = [str(y) for y in cfg.years]
+def _build_non_ncaa_schedules_cmd(year: int, cfg: PipelineConfig) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "scrapers.collect_non_ncaa_schedules",
+        "--year", str(year),
+        "--divisions", "naia", "njcaa_1", "njcaa_2", "njcaa_3",
+        "--outdir", str(cfg.schedules_outdir),
+    ]
+
+
+def _build_collect_game_cmd(year: int, cfg: PipelineConfig) -> list[str]:
+    ncaa_divs = _ncaa_divs(cfg)
+    return [
+        sys.executable,
+        "-m",
+        "scrapers.collect_game",
+        "--year", str(year),
+        "--divisions", *ncaa_divs,
+        "--indir", str(cfg.schedules_outdir),
+        "--pbp_outdir", str(cfg.pbp_outdir),
+        "--lineups_outdir", str(cfg.lineups_outdir),
+    ]
+
+
+def _build_cube_stats_commands(cfg: PipelineConfig) -> list[list[str]]:
+    years_args = [str(y) for y in CUBE_STATS_YEARS]
     ncaa_divs = _ncaa_divs(cfg)
     cube_stats_dir = cfg.data_root / "cube_stats"
     team_history_file = cfg.data_root / "cube_team_history.csv"
-
-    cmds: list[list[str]] = []
-    for div in ncaa_divs:
-        cmds.append([
+    team_mappings = cfg.data_root / "team_mappings.csv"
+    ncaa_history = cfg.data_root / "ncaa_team_history.csv"
+    return [
+        [
             sys.executable, "-m", "scrapers.collect_cube_stats",
             "--team_history_file", str(team_history_file),
+            "--team_mappings_file", str(team_mappings),
+            "--ncaa_history_file", str(ncaa_history),
             "--division", div,
             "--outdir", str(cube_stats_dir),
             "--years", *years_args,
-            "--run_remaining",
-        ])
-    cmds.append([
+        ]
+        for div in ncaa_divs
+    ]
+
+
+def _build_cube_player_info_cmd(cfg: PipelineConfig) -> list[str]:
+    years_args = [str(y) for y in CUBE_STATS_YEARS]
+    ncaa_divs = _ncaa_divs(cfg)
+    cube_stats_dir = cfg.data_root / "cube_stats"
+    return [
         sys.executable, "-m", "scrapers.collect_cube_player_info",
         "--data_dir", str(cfg.data_root),
         "--out_file", str(cube_stats_dir / "cube_player_info.csv"),
         "--run_remaining",
+        "--workers", str(cfg.cube_player_info_workers),
         "--years", *years_args,
         "--divisions", *ncaa_divs,
-    ])
-    cmds.append([
+    ]
+
+
+def _build_reconcile_players_cmd(cfg: PipelineConfig) -> list[str]:
+    return [
         sys.executable, "-m", "processors.reconcile_players",
         "--data_dir", str(cfg.data_root),
-    ])
-    return cmds
+    ]
 
 
 def _build_resolve_commands(cfg: PipelineConfig) -> list[list[str]]:
@@ -121,18 +170,46 @@ def run_pipeline(cfg: PipelineConfig, project_root: Path) -> int:
             prefix=cfg.s3_prefix,
             local_dir=cfg.data_root,
             region=cfg.s3_region,
+            years=cfg.years,
         )
 
     try:
         for year in cfg.years:
-            logger.info(f"Starting scraper sequence for year={year}")
-            for cmd in _build_year_commands(project_root, year, cfg):
-                ok = _run_command(cmd, project_root)
-                any_failed = any_failed or (not ok)
+            logger.info(f"NCAA schedules year={year}")
+            ok = _run_command(_build_collect_schedules_cmd(year, cfg), project_root)
+            any_failed = any_failed or (not ok)
 
-        for cmd in _build_cube_commands(cfg):
+        for year in cfg.years:
+            logger.info(f"Non-NCAA schedules year={year}")
+            ok = _run_command(_build_non_ncaa_schedules_cmd(year, cfg), project_root)
+            any_failed = any_failed or (not ok)
+
+        for year in cfg.years:
+            logger.info(f"PBP + lineups year={year}")
+            ok = _run_command(_build_collect_game_cmd(year, cfg), project_root)
+            any_failed = any_failed or (not ok)
+
+        cube_info_path = cfg.data_root / "cube_stats" / "cube_player_info.csv"
+        player_info_lines_before = _line_count(cube_info_path)
+
+        for cmd in _build_cube_stats_commands(cfg):
             ok = _run_command(cmd, project_root)
             any_failed = any_failed or (not ok)
+
+        ok = _run_command(_build_cube_player_info_cmd(cfg), project_root)
+        any_failed = any_failed or (not ok)
+
+        player_info_lines_after = _line_count(cube_info_path)
+        if player_info_lines_after > player_info_lines_before:
+            logger.info(
+                "cube_player_info grew (%d -> %d lines), running reconcile_players",
+                player_info_lines_before,
+                player_info_lines_after,
+            )
+            ok = _run_command(_build_reconcile_players_cmd(cfg), project_root)
+            any_failed = any_failed or (not ok)
+        else:
+            logger.info("Skipping reconcile_players (no new cube_player_info rows)")
 
         for cmd in _build_resolve_commands(cfg):
             ok = _run_command(cmd, project_root)
@@ -162,7 +239,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--env_file", default=None, help="Optional .env file path")
     parser.add_argument("--years", nargs="+", type=int, default=None)
-    parser.add_argument("--divisions", nargs="+", type=int, default=None)
+    parser.add_argument(
+        "--divisions",
+        nargs="+",
+        type=_parse_division_arg,
+        default=None,
+        metavar="DIV",
+        help="NCAA division numbers: 1 2 3 or ncaa_1 ncaa_2 ncaa_3",
+    )
     parser.add_argument("--base_delay", type=float, default=None)
     parser.add_argument("--data_root", default=None)
     parser.add_argument("--team_ids_file", default=None)
@@ -171,6 +255,8 @@ def main() -> int:
     parser.add_argument("--pbp_outdir", default=None)
     parser.add_argument("--lineups_outdir", default=None)
     parser.add_argument("--rankings_data_dir", default=None)
+    parser.add_argument("--rankings_outdir", default=None, help="Same as GitHub RANKINGS_OUTDIR (overrides rankings_data_dir)")
+    parser.add_argument("--cube_player_info_workers", type=int, default=None)
     parser.add_argument("--s3_bucket", default=None)
     parser.add_argument("--s3_prefix", default=None)
     parser.add_argument("--s3_region", default=None)
@@ -199,8 +285,11 @@ def main() -> int:
         cfg.pbp_outdir = Path(args.pbp_outdir).expanduser().resolve()
     if args.lineups_outdir:
         cfg.lineups_outdir = Path(args.lineups_outdir).expanduser().resolve()
-    if args.rankings_data_dir:
-        cfg.rankings_data_dir = Path(args.rankings_data_dir).expanduser().resolve()
+    ro = args.rankings_outdir or args.rankings_data_dir
+    if ro:
+        cfg.rankings_data_dir = Path(ro).expanduser().resolve()
+    if args.cube_player_info_workers is not None:
+        cfg.cube_player_info_workers = args.cube_player_info_workers
 
     if args.s3_bucket is not None:
         cfg.s3_bucket = args.s3_bucket

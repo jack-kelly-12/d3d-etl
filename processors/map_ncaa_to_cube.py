@@ -25,6 +25,24 @@ YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
 DIVISIONS = ["ncaa_1", "ncaa_2", "ncaa_3"]
 FUZZY_THRESHOLD = 70
 
+_JERSEY_LEADING = re.compile(
+    r"^\s*(?:no\.?|#|number\s*)?\s*(\d{1,3})\s*([-–—.:]|\s+)\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _parse_jersey_from_name(raw: str) -> tuple[int | None, str]:
+    """If *raw* starts with a jersey-style prefix, return (number, remainder for name match)."""
+    s = str(raw).strip()
+    if not s:
+        return None, ""
+    if re.fullmatch(r"\d{1,3}", s):
+        return int(s), ""
+    m = _JERSEY_LEADING.match(s)
+    if m:
+        return int(m.group(1)), m.group(3).strip()
+    return None, s
+
 
 def _load_cube_lookup(data_dir: Path, divisions: list[str], years: list[int]) -> pd.DataFrame:
     """Load cube stats for the given divisions/years, normalizing team_id to ncaa_slug."""

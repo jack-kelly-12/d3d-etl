@@ -1,7 +1,9 @@
 import argparse
 import asyncio
+import base64
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -13,6 +15,14 @@ from .scraper_utils import BLOCKED_RESOURCE_TYPES
 
 OUTDIR = "/Users/jackkelly/Desktop/d3d-etl/data/headshots"
 SCHOOL_LIST_FILE = "/Users/jackkelly/Desktop/d3d-etl/data/school_websites.json"
+
+# Schools that use the WMT WordPress platform where player photos are only
+# reliably available on individual player pages, not the roster page.
+WMT_SCHOOLS = {
+    "University of Notre Dame",
+    "Brigham Young University",
+    "Vanderbilt University",
+}
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -49,6 +59,59 @@ def build_candidate_urls(base: str, season: int) -> list[tuple[str, str]]:
         (f"{base}/sports/baseball/roster/{season}", "sidearm"),
         (f"{base}/sports/bsb/{presto_season_slug(season)}/roster", "presto"),
     ]
+
+def _extract_wmt_image(html: str) -> str | None:
+    """Extract the player headshot URL from a WMT player page.
+
+    WMT sites proxy images through imgproxy with a base64-encoded real URL as
+    the last path segment. The player photo is the most-repeated imgproxy jpg.
+    Vanderbilt skips imgproxy and puts wp-content URLs directly in the HTML.
+    """
+    proxied = re.findall(
+        r"https?://[^/]+/imgproxy/[A-Za-z0-9_\-]+/[^\s\"'<>]+\.(?:jpg|png|webp)",
+        html,
+    )
+    if proxied:
+        counts = Counter(proxied)
+        for url, _ in counts.most_common():
+            b64 = url.rsplit("/", 1)[1].rsplit(".", 1)[0]
+            b64 += "=" * (-len(b64) % 4)
+            try:
+                decoded = base64.b64decode(b64).decode()
+                if re.search(r"\.(jpg|jpeg|png|webp)$", decoded, re.I):
+                    return decoded
+            except Exception:
+                pass
+
+    wp = re.findall(
+        r"https?://[^\s\"'<>]+/wp-content/uploads/[^\s\"'<>]+\.(?:jpg|jpeg|png|webp)",
+        html,
+    )
+    if wp:
+        return Counter(wp).most_common(1)[0][0]
+
+    return None
+
+
+def _parse_wmt_roster_links(html: str, base_url: str) -> list[tuple[str, str]]:
+    """Return (player_name, absolute_player_page_url) pairs from a WMT roster page."""
+    soup = BeautifulSoup(html, "html.parser")
+    seen: set[str] = set()
+    out = []
+    for a in soup.find_all("a", href=re.compile(r"/sports/.+/player/")):
+        href = a["href"]
+        name = a.get_text(" ", strip=True)
+        if not name:
+            # fallback: title attribute on a child element
+            span = a.find(title=True)
+            if span:
+                name = span["title"].strip()
+        if not name or href in seen:
+            continue
+        seen.add(href)
+        out.append((name, base_url.rstrip("/") + href))
+    return out
+
 
 def detect_cms(html: str) -> str | None:
     h = (html or "").lower()
@@ -373,6 +436,69 @@ async def fetch_html(page, url: str, timeout_ms: int) -> tuple[str | None, int]:
         return None, 0
 
 
+async def _scrape_wmt_team(
+    context: BrowserContext,
+    base: str,
+    team_name: str,
+    season: int,
+    timeout_ms: int,
+) -> list[dict]:
+    """Scrape a WMT school by visiting each player's individual page for the image."""
+    roster_url = f"{base.rstrip('/')}/sports/baseball/roster"
+    page = await context.new_page()
+    try:
+        resp = await page.goto(roster_url, timeout=timeout_ms, wait_until="domcontentloaded")
+        if not resp or resp.status >= 400:
+            print(f"    {team_name}: WMT roster HTTP {resp.status if resp else 0}")
+            return []
+        html = await page.content()
+    finally:
+        await page.close()
+
+    player_links = _parse_wmt_roster_links(html, base)
+    if not player_links:
+        print(f"    {team_name}: WMT no player links found")
+        return []
+
+    print(f"    {team_name}: WMT {len(player_links)} player pages to fetch")
+
+    async def fetch_player_image(name: str, player_url: str) -> dict:
+        p = await context.new_page()
+        try:
+            resp = await p.goto(player_url, timeout=timeout_ms, wait_until="domcontentloaded")
+            if not resp or resp.status >= 400:
+                img_url = None
+            else:
+                player_html = await p.content()
+                img_url = _extract_wmt_image(player_html)
+        except Exception:
+            img_url = None
+        finally:
+            await p.close()
+        return _row(
+            team=team_name,
+            season=season,
+            url=roster_url,
+            name=name,
+            number=None,
+            position=None,
+            height=None,
+            weight=None,
+            player_class=None,
+            b_t=None,
+            hometown=None,
+            highschool=None,
+            previous_school=None,
+            img_url=img_url,
+        )
+
+    tasks = [asyncio.create_task(fetch_player_image(name, url)) for name, url in player_links]
+    rows = await asyncio.gather(*tasks)
+    found = sum(1 for r in rows if r["img_url"])
+    print(f"    {team_name}: WMT {found}/{len(rows)} images found")
+    return list(rows)
+
+
 async def scrape_team(
     context: BrowserContext,
     base: str,
@@ -380,6 +506,9 @@ async def scrape_team(
     season: int,
     timeout_ms: int,
 ) -> list[dict]:
+    if team_name in WMT_SCHOOLS:
+        return await _scrape_wmt_team(context, base, team_name, season, timeout_ms)
+
     candidates = build_candidate_urls(base, season)
     page = await context.new_page()
 
